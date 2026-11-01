@@ -1,6 +1,8 @@
 # MSSQL ingest
 
-English summary: two HTTP services, .NET 10 and Rust, accept `POST /v1/ingest` and acknowledge only after Microsoft SQL Server commits the row. The .NET service can write one `INSERT` per request or a `SqlBulkCopy` batch. The Rust service uses tiberius bulk load for the batch path and one parameterized `INSERT` for the single path. A bounded queue returns 429 when it is full. SQL Server 2022 runs in Docker. `scripts/measure.sh` holds a constant arrival rate and checks that `COUNT(*)` matches acknowledged requests. Every number below is an indicative result from one cloud VM, not a capacity claim for production hardware.
+English summary: two HTTP services, .NET 10 and Rust, accept `POST /v1/ingest` and acknowledge only after Microsoft SQL Server commits the row. The .NET service can write one `INSERT` per request or a `SqlBulkCopy` batch. The Rust service uses tiberius 0.13 bulk load for the batch path and one parameterized `INSERT` for the single path. A bounded queue returns 429 when it is full. SQL Server 2022 runs in Docker. `scripts/measure.sh` holds a constant arrival rate and checks that `COUNT(*)` matches acknowledged requests.
+
+On this 4-vCPU cloud VM, all three measured setups held 1,000 requests/second for 60 seconds with no errors, and the row count matched the 202 responses (including warmup). One INSERT was faster at that rate (p50 0.83 ms versus about 10–12 ms for batches, which wait for a 10 ms flush). Batching is what still answered 8,000 rps with no errors. One INSERT started returning 429 between 3,000 and 5,000 rps. At 12,000 rps the batch writers fell behind (p50 118 ms on .NET, 34 ms on Rust) while SQL CPU stayed under about 65%. Every number is indicative of this single VM, not a production capacity claim.
 
 ## 무엇을 재는지
 
@@ -97,11 +99,65 @@ CI (`.github/workflows/mssql-ingest.yml`) 는 `mssql-ingest/**` 만 보고, 두 
 
 ## 결과
 
-측정 조건: 클라우드 VM 4 vCPU, SQL Server 2022 Developer (`mcr.microsoft.com/mssql/server:2022-latest`, 16.0.4305.5) 컨테이너, 메모리 상한 2048 MB, `shm` 1 GB, 복구 모델 SIMPLE, 지연 내구성 끔, 단일 노드, 복제 없음. 페이로드는 ASCII 512바이트. 서비스는 호스트 프로세스이고 SQL 만 컨테이너다. 두 서비스를 동시에 띄우지 않았다. 도착률은 k6 `constant-arrival-rate` 이고, 지연은 그 구간의 `http_req_duration` 이다. CPU 는 코어 하나 기준 100% 이다 (400% 면 4코어를 다 씀). 행 수는 그 실행에서 202 를 받은 요청 전체(워밍업 포함)와 같다.
+한 대의 클라우드 VM 에서 나온 참고치다. 4 vCPU (Intel Xeon), 게스트 메모리 15 GiB 이며 하이퍼바이저 풍선이 켜져 있다. SQL Server 2022 Developer 16.0.4305.5 는 컨테이너이고 메모리 상한 2048 MB, `shm` 1 GB, 복구 모델 SIMPLE, 지연 내구성 끔, 단일 노드, 복제 없다. 페이로드는 ASCII 512바이트. 서비스는 호스트 프로세스이고 SQL 만 컨테이너다. 두 서비스를 동시에 띄우지 않았다. 배치 설정은 크기 128, 플러시 10ms, 라이터 2, 큐 16384, 단일 모드 동시성 128. CPU 는 코어 하나 기준 100% 이다. 행 수는 그 실행에서 202 를 받은 요청 전체(워밍업 포함)와 같고, `COUNT(DISTINCT id)` 도 그 값과 같았다. 429 는 표에 쓰지 않았다.
 
-표의 숫자는 아래 커밋에 적힌 실행에서 채운다. 아직 60초 실행 전이면 이 문장이 남아 있다. 실행이 끝나면 이 문단을 표로 바꾼다.
+### 60초, 목표 1000 rps
 
-짧은 smoke (50 rps, 지속 10초, .NET 배치) 는 도구가 행 수와 202 를 맞추는지 확인한 것이다. 달성 50.1 rps, p50 16.3 ms, 오류 0, 행 542 = 승인 542, distinct 542. 이 속도에서는 요청 간격이 플러시 10ms 보다 길어서 평균 배치 크기가 약 1행이었다. 1000 rps 구간의 배치 크기는 본 측정에서 따로 적는다.
+워밍업 15초 × 200 rps 다음 60초. 세 구성 모두 목표를 유지했다. 오류는 0 이고, DB 행 수는 202 와 같다.
+
+| 서비스 | 방식 | 달성 rps | p50 | p95 | p99 | 오류 | 202 = 행 | 평균 배치 | 서비스 CPU 평균/최대 | 서비스 RSS | SQL CPU 평균/최대 | SQL 메모리 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| .NET | batch | 1000.0 | 11.9 ms | 21.7 ms | 26.2 ms | 0 | 63001 | 7.0행 | 34% / 57% | 157 MiB | 48% / 57% | 825 MiB |
+| .NET | single | 1000.0 | 0.83 ms | 2.0 ms | 5.7 ms | 0 | 63002 | — | 41% / 57% | 152 MiB | 40% / 51% | 841 MiB |
+| Rust | batch | 1000.0 | 10.0 ms | 15.2 ms | 17.4 ms | 0 | 63001 | 9.8행 | 8% / 10% | 26 MiB | 22% / 27% | 842 MiB |
+
+이 속도에서 배치가 처리량을 올려 주지는 않는다. 한 건 INSERT 가 이미 1000 rps 를 p50 1 ms 아래로 소화한다. 배치의 p50 은 플러시 10 ms 와 거의 같다. 이 구간에서 배치의 이득은 지연이 아니라 CPU 다. Rust 배치는 서비스 CPU 약 8%, SQL CPU 약 22% 로 .NET 단일 INSERT (서비스 약 41%, SQL 약 40%) 보다 가볍다. .NET `SqlBulkCopy` 는 평균 7행이라 고정 비용이 커서, 1000 rps 에서는 단일 INSERT 보다 SQL CPU 가 약간 더 높고 지연은 더 길다.
+
+### 단계 상승
+
+k6 `ramping-arrival-rate` 로 200 에서 3000 rps 까지 110초에 걸쳐 올렸다. 초 단위로 센 달성률은 일정표를 따라갔고, 어느 쪽도 3000 아래에서 무너지지 않았다.
+
+| 서비스 | 방식 | 1초 최대 | 202 가 아닌 응답 |
+| --- | --- | --- | --- |
+| .NET | batch | 2997 rps | 0 |
+| .NET | single | 2940 rps | 429 가 11건, 약 2890 rps 부근 |
+| Rust | batch | 2947 rps | 0 |
+
+### 20초 평탄 구간
+
+1000 rps 가 천장이 아니어서, 같은 설정으로 더 높은 상수 도착률을 20초씩 잡았다. 워밍업은 5초다. 이 줄은 60초 증명보다 짧다.
+
+| 서비스 | 방식 | 목표 | 달성 rps | p50 | p95 | p99 | 오류 | 평균 배치 | 서비스 CPU 평균/최대 | SQL CPU 평균/최대 | k6 가 놓친 반복 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| .NET | single | 5000 | 5001 | 3.4 ms | 33 ms | 89 ms | 3.33% (429) | — | 93% / 126% | 119% / 151% | 0 |
+| .NET | batch | 5000 | 5000 | 14.6 ms | 35 ms | 50 ms | 0 | 40행 | 60% / 87% | 44% / 54% | 11 |
+| Rust | batch | 5000 | 5000 | 10.7 ms | 17 ms | 23 ms | 0 | 47행 | 18% / 22% | 26% / 30% | 0 |
+| .NET | single | 8000 | 7741 | 18.8 ms | 105 ms | 186 ms | 25.8% (429) | — | 81% / 121% | 112% / 154% | 5173 |
+| .NET | batch | 8000 | 8000 | 15.8 ms | 54 ms | 80 ms | 0 | 64행 | 61% / 112% | 46% / 58% | 55 |
+| Rust | batch | 8000 | 8002 | 13.6 ms | 38 ms | 68 ms | 0 | 72행 | 26% / 32% | 32% / 42% | 0 |
+| .NET | batch | 12000 | 11311 | 118 ms | 239 ms | 263 ms | 0 | 103행 | 66% / 101% | 48% / 64% | 13875 |
+| Rust | batch | 12000 | 11872 | 34 ms | 147 ms | 193 ms | 0 | 99행 | 34% / 43% | 38% / 50% | 2600 |
+
+읽는 법:
+
+- **1000 rps 는 세 구성 모두 60초 동안 유지됐다.**
+- 단일 INSERT 는 3000 rps 근처에서 429 가 처음 보이고, 5000 rps 에서 약 3%, 8000 rps 에서 약 26% 가 429 다. SQL CPU 가 코어 하나 반까지 올라 포화에 가깝고, 동시성 상한 128 이 그 부하를 429 로 흘려보낸다. DB 에 들어간 행 수는 202 와 일치한다. 429 는 커밋되지 않았다.
+- 배치는 8000 rps 를 20초 동안 오류 없이 유지했다. 12000 rps 는 유지하지 못했다. .NET 은 약 11300 rps, Rust 는 약 11900 rps 를 받았고 429 는 없었다. 대신 p50 이 .NET 118 ms, Rust 34 ms 로 벌어졌고, k6 가 느린 응답 때문에 반복을 놓쳤다. 그때 SQL CPU 는 65% 아래였다. 라이터 2개와 배치 128 이 먼저 막힌 것이고, SQL 코어가 모두 찬 것은 아니다.
+- 그래서 이 VM 에서 배치가 의미 있는 지점은 1000 rps 가 아니라 그 위다. 1000 rps 에서는 단일 INSERT 가 더 짧고, 5000 rps 부터는 배치만 오류 없이 도착률을 따라간다.
+
+재현은 위의 `measure.sh` 세 줄에 더해 다음이다. `STRICT=0` 은 목표를 못 채워도 스크립트가 측정 파일을 남기게 한다.
+
+```bash
+RATE=5000 DURATION=20s WARMUP=5s WARMUP_RATE=1500 PRE_ALLOCATED_VUS=800 MAX_VUS=4000 STRICT=0 \
+  ./scripts/measure.sh dotnet single sustain
+RATE=8000 DURATION=20s WARMUP=5s WARMUP_RATE=2000 PRE_ALLOCATED_VUS=1200 MAX_VUS=5000 STRICT=0 \
+  ./scripts/measure.sh dotnet batch sustain
+RATE=12000 DURATION=20s WARMUP=5s WARMUP_RATE=3000 PRE_ALLOCATED_VUS=2000 MAX_VUS=6000 STRICT=0 \
+  ./scripts/measure.sh rust batch sustain
+./scripts/measure.sh dotnet batch step
+```
+
+단계 상승의 1초 최대는 k6 CSV 의 `http_reqs` 를 초 단위로 센 것이다. 램프는 구간 끝 속도까지 직선으로 올라가므로, 구간 평균을 끝 속도와 비교하면 포화된 것처럼 보인다. 그 비교는 쓰지 않았다.
 
 ## 숫자를 제한하는 것
 
@@ -126,8 +182,10 @@ CI (`.github/workflows/mssql-ingest.yml`) 는 `mssql-ingest/**` 만 보고, 두 
 
 ## 소유자가 정할 것
 
+- 1000 rps 만 필요하면 단일 INSERT 가 지연이 더 짧다. 5000 rps 근처부터는 배치가 429 없이 버틴다. 어느 쪽을 기본으로 둘지.
+- 라이터를 2 보다 늘릴지. 12000 rps 에서 SQL CPU 는 65% 아래였고, 막힌 쪽은 라이터와 큐 지연이다. 라이터를 늘린 측정은 하지 않았다.
 - 프로덕션 복구 모델을 SIMPLE 로 둘지 FULL 로 둘지. 이 저장소의 기본값은 벤치마크용 SIMPLE 이다.
 - 배치 안 중복 한 건이 배치 전체를 실패시켜도 되는지. 격리해서 재시도하는 경로는 넣지 않았다.
-- 플러시 10ms / 배치 128 / 라이터 2 를 지연과 처리량 중 어디에 맞출지.
-- 응답 코드를 202 로 고정할지. 계약은 202 이고, 200 도 "커밋 후"라면 같은 의미로 받을 수 있다.
+- 플러시 10ms / 배치 128 을 지연과 처리량 중 어디에 맞출지. 10 ms 는 1000 rps 배치 p50 의 대부분이다.
+- 응답 코드를 202 로 고정할지. 계약은 202 이고, 200 도 커밋 뒤라면 같은 의미로 받을 수 있다.
 - 실제 SA 비밀번호와 포트 노출. 기본 비밀번호는 로컬 전용이다.

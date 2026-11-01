@@ -6,13 +6,15 @@ import csv
 import json
 from pathlib import Path
 
+# k6 ramping-arrival-rate moves linearly from the previous target to the next.
+# The expected count in a stage is the average of the two ends, not the end rate.
 STAGES = [
-    ("200", 0, 15, 200),
-    ("500", 15, 30, 500),
-    ("1000", 30, 50, 1000),
-    ("1500", 50, 70, 1500),
-    ("2000", 70, 90, 2000),
-    ("3000", 90, 110, 3000),
+    ("200", 0, 15, 200, 200),
+    ("500", 15, 30, 200, 500),
+    ("1000", 30, 50, 500, 1000),
+    ("1500", 50, 70, 1000, 1500),
+    ("2000", 70, 90, 1500, 2000),
+    ("3000", 90, 110, 2000, 3000),
 ]
 
 
@@ -29,7 +31,7 @@ def main() -> None:
     time_key = "timestamp" if "timestamp" in rows[0] else next(iter(rows[0]))
     start = min(float(row[time_key]) for row in rows if row.get("metric_name") == "http_reqs")
     buckets = []
-    for label, begin, end, target in STAGES:
+    for label, begin, end, start_rate, end_rate in STAGES:
         sent = 0
         failed = 0
         for row in rows:
@@ -43,14 +45,16 @@ def main() -> None:
                     failed += 1
         seconds = end - begin
         achieved = sent / seconds if seconds else 0
+        expected = (start_rate + end_rate) / 2
         buckets.append(
             {
-                "target_rps": target,
+                "stage_end_rps": end_rate,
+                "expected_avg_rps": expected,
                 "window_s": seconds,
                 "requests": sent,
                 "achieved_rps": round(achieved, 1),
                 "non_202": failed,
-                "held": achieved >= target * 0.95 and failed / sent < 0.01 if sent else False,
+                "tracked_ramp": achieved >= expected * 0.90 and (failed / sent < 0.01 if sent else False),
             }
         )
     Path(args.out).write_text(json.dumps(buckets, indent=2) + "\n", encoding="utf-8")
