@@ -35,15 +35,19 @@ def main() -> int:
         if parsed["id"] != case["id"] or parsed["data"] != case["data"] or parsed["multiplier"] != case["multiplier"]:
             print(f"request JSON does not match fields: {case['name']}", file=sys.stderr)
             return 1
-        raw = case["data"].encode("utf-8")
-        checksum = fnv1a32(raw)
-        length = len(raw)
+        raw_message = case["requestJson"].encode("utf-8")
+        checksum = fnv1a32(raw_message)
+        length = len(raw_message)
         tag = (checksum ^ case["multiplier"] ^ length) & 0xFFFFFFFF
         if (checksum, length, tag) != (case["checksum"], case["length"], case["tag"]):
-            print(f"checksum mismatch: {case['name']}", file=sys.stderr)
+            print(
+                f"checksum mismatch: {case['name']} got {(checksum, length, tag)} file {(case['checksum'], case['length'], case['tag'])}",
+                file=sys.stderr,
+            )
             return 1
         expected = {
             "id": case["id"],
+            "data": case["data"],
             "checksum": checksum,
             "length": length,
             "tag": tag,

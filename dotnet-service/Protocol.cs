@@ -81,12 +81,19 @@ public static class Protocol
             return false;
         }
 
-        byte[] utf8 = Encoding.UTF8.GetBytes(request.Data);
-        uint length = (uint)utf8.Length;
-        uint checksum = Fnv1a32(utf8);
+        // Hash every byte of the decrypted body, including JSON syntax, then copy
+        // Data into the response so the ciphertext covers the whole payload.
+        if (plaintext.Length > int.MaxValue)
+        {
+            error = "invalid_request";
+            return false;
+        }
+
+        uint length = (uint)plaintext.Length;
+        uint checksum = Fnv1a32(plaintext);
         uint tag = checksum ^ request.Multiplier.Value ^ length;
         response = JsonSerializer.SerializeToUtf8Bytes(
-            new ProcessResponse(request.Id, checksum, length, tag),
+            new ProcessResponse(request.Id, request.Data, checksum, length, tag),
             Context.ProcessResponse);
         error = "";
         return true;
@@ -100,7 +107,7 @@ public sealed class ProcessRequest
     public uint? Multiplier { get; set; }
 }
 
-public sealed record ProcessResponse(string Id, uint Checksum, uint Length, uint Tag);
+public sealed record ProcessResponse(string Id, string Data, uint Checksum, uint Length, uint Tag);
 
 [JsonSourceGenerationOptions(
     PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase,

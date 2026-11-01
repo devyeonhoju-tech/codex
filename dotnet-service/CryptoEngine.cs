@@ -70,6 +70,12 @@ public sealed class CryptoEngine : IDisposable
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         plaintext = Array.Empty<byte>();
+        if (wire.Length < NonceLength)
+        {
+            error = "missing_nonce";
+            return false;
+        }
+
         if (wire.Length < NonceLength + TagLength)
         {
             error = "truncated_message";

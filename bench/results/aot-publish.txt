@@ -1,5 +1,5 @@
   Determining projects to restore...
-  Restored /workspace/dotnet-service/CryptoBench.csproj (in 205 ms).
+  Restored /workspace/dotnet-service/CryptoBench.csproj (in 202 ms).
   CryptoBench -> /workspace/dotnet-service/bin/Release/net10.0/linux-x64/cryptobench.dll
   Generating native code
   CryptoBench -> /workspace/dotnet-service/publish-aot/

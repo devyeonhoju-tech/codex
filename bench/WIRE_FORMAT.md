@@ -10,11 +10,14 @@ Both services and the load generator speak this protocol. Byte layout and the pr
 - `GET /health` returns the exact body `ok` (text/plain) when the process is up.
 - Failures are **not** encrypted. The body is compact JSON `{"error":"<code>"}` with `Content-Type: application/json`.
 
+There is no plaintext mode, query flag, or benchmark switch that skips decryption or encryption. `POST /v1/process` always decrypts the entire body and, on success, encrypts the entire response. Anything that is not a complete authentic frame is rejected:
+
 | Status | `error` code | When |
 | --- | --- | --- |
-| 400 | `truncated_message` | Body shorter than 28 bytes |
-| 400 | `decrypt_failed` | AES-GCM authentication failed |
-| 400 | `invalid_json` | Plaintext is not the request JSON schema |
+| 400 | `missing_nonce` | Body shorter than 12 bytes, so there is no nonce |
+| 400 | `truncated_message` | Nonce present, but ciphertext plus tag is shorter than 16 bytes |
+| 400 | `decrypt_failed` | Frame is long enough and AES-GCM authentication failed. This includes a tampered tag, a truncated ciphertext that is still at least 28 bytes, a body encrypted with the wrong key, and a plaintext/JSON body that is not a valid frame |
+| 400 | `invalid_json` | Decrypted bytes are not the request JSON schema |
 | 400 | `invalid_request` | JSON parsed but a field is missing or out of range |
 | 413 | `body_too_large` | Body larger than 8 MiB (the host may also reject it first) |
 
@@ -30,7 +33,7 @@ The value checked into `bench/testdata/bench_key.hex` is a **public benchmark ke
 
 AES-256-GCM, 96-bit nonce, 128-bit tag, empty additional authenticated data (no AAD).
 
-Each message a service **sends** uses a fresh nonce from the OS CSPRNG. The tag is the standard 16-byte GCM tag. Decrypting with the wrong key or a flipped bit must fail closed (`decrypt_failed`).
+Each message a service **sends** uses a fresh nonce from the OS CSPRNG. The tag is the standard 16-byte GCM tag over the entire plaintext. Decrypting with the wrong key, a flipped bit, or a plaintext body must fail closed (`decrypt_failed` once the body is long enough to be a frame).
 
 ### Byte layout
 
@@ -66,33 +69,35 @@ The benchmark's `data` sizes (1 KiB, 64 KiB, 1 MiB) are this decoded UTF-8 lengt
 
 ### Processing
 
-Let `bytes` be the UTF-8 encoding of `data` (not UTF-16 code units, not the raw JSON text).
+The checksum covers **every byte of the decrypted request**, including the JSON punctuation, not only the `data` field and not UTF-16 code units.
 
 FNV-1a 32-bit:
 
 ```
 hash = 2166136261
-for each byte b in bytes:
+for each byte b in the decrypted request:
     hash = (hash XOR b) * 16777619    # mod 2^32
-length = number of bytes            # fits in uint32 because of the limit above
-tag = hash XOR multiplier XOR length   # uint32 bitwise xor
+length = number of decrypted bytes    # the whole plaintext
+tag = hash XOR multiplier XOR length  # uint32 bitwise xor
 ```
+
+`data` is then copied unchanged into the response. The service encrypts that whole response, so the ciphertext is the size of the payload, not a short digest.
 
 ### Response
 
 Compact UTF-8 JSON, no extra whitespace, keys in this order, default JSON string escaping (`"`, `\`, and control characters; do **not** escape `/`; do **not** escape non-ASCII as `\uXXXX`):
 
 ```json
-{"id":"<same id>","checksum":<hash>,"length":<length>,"tag":<tag>}
+{"id":"<same id>","data":"<same data>","checksum":<hash>,"length":<length>,"tag":<tag>}
 ```
 
-`checksum`, `length`, and `tag` are JSON numbers, not strings. `id` is echoed exactly.
+`checksum`, `length`, and `tag` are JSON numbers, not strings. `id` and `data` are echoed exactly. `length` is the decrypted request size, not the length of `data` alone.
 
-`bench/testdata/process_vectors.json` holds request JSON, expected response JSON, and the integer fields. Both services must emit those response bytes.
+`bench/testdata/process_vectors.json` holds request JSON, expected response JSON, and the integer fields. Both services must emit those response bytes. The interop client also checks 1 KiB, 64 KiB, and 1 MiB messages by decrypting the response and comparing its full length and bytes.
 
 ## What the load generator does
 
-`crypto-bench load` builds one request of the chosen `data` length (`id` = `bench`, `data` = `x` repeated, `multiplier` = 1), encrypts it once, and resends those same bytes. Repeating a GCM nonce under one key is not safe in production; it is only so every request is byte-identical. Response nonces are still random. The tool checks one decrypted response against the expected JSON and reports client latency plus the server's CPU and RSS.
+`crypto-bench load` builds one request of the chosen `data` length (`id` = `bench`, `data` = `x` repeated, `multiplier` = 1), encrypts it once, and resends those same bytes. Repeating a GCM nonce under one key is not safe in production; it is only so every request is byte-identical. Response nonces are still random. During the measured window every 32nd success is decrypted and compared, in full, to the expected response bytes. A repetition with no full match is a failure. The tool also reports client latency plus the server's CPU and RSS.
 
 ## Benchmark defaults
 

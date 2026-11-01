@@ -1,40 +1,40 @@
-# Observations from the Native AOT run
+# Observations from the full-message run
 
-`results.md` is the table. This note is the reading of it. The script rewrites the table and does not rewrite this file.
+The decrypted request is hashed in full, and the encrypted response echoes `data`, so the ciphertext is the size of the payload rather than a short digest. `results.md` is the table from that run. The script does not rewrite this file.
 
-`environment.txt` records `git=e27496e` because that was HEAD when the script started. This run's binaries include `ProtocolJsonContext`, which was not in that commit. The commit that adds these results contains that source generator.
+`environment.txt` records `git=e27496e` because that was HEAD when the script started. The processing change is in the commit that adds these results.
 
-JSON for every .NET variant, JIT and AOT, goes through that context. The wire format and the FNV step are unchanged. Python interop passed against both the ReadyToRun binary and the Native AOT binary, including a tampered tag, invalid JSON, and a missing field. Because the shared serializer changed, the JIT GC variants were measured again in the same run. Server GC at 1 KiB is 101956.6 req/s and 89.6 MiB, next to 100023.6 req/s and 91.4 MiB on the previous reflection-based run. Same band, new measurement.
+Interop, including the Native AOT binary, checked 1 KiB, 64 KiB, and 1 MiB responses by length and bytes, and rejected a tampered tag, a truncated ciphertext, a truncated frame, a wrong key, a missing nonce, and a plaintext body. During each load repetition every 32nd success was decrypted and compared in full. Sample counts on the 1 MiB rows are about 160 per repetition, with `verified=true` and zero HTTP errors.
 
-## Medians
+## What changed versus the previous run
+
+The previous response was a small JSON digest. Encrypting the echoed payload lowered throughput. Medians:
+
+| Variant | 1 KiB req/s then | 1 KiB req/s now | 1 MiB req/s then | 1 MiB req/s now |
+| --- | ---: | ---: | ---: | ---: |
+| rust | 185926.3 | 157886.0 | 875.4 | 533.8 |
+| dotnet-server-gc | 101956.6 | 95544.9 | 576.9 | 483.9 |
+| dotnet-aot | 92096.4 | 83945.6 | 518.9 | 466.0 |
+
+1 KiB RSS stayed in the same place: Rust 4.6 to 4.9 MiB, Server GC 89.6 to 90.1, AOT 35.0 to 33.4. 1 MiB RSS rose where the larger response has to live: Server GC 231.5 to 278.2 MiB, AOT 149.8 to 211.9.
+
+## This run
 
 | Variant | 1 KiB req/s | 1 KiB RSS | 64 KiB req/s | 64 KiB RSS | 1 MiB req/s | 1 MiB RSS |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| rust | 185926.3 | 4.6 | 14973.2 | 8.9 | 875.4 | 36.2 |
-| dotnet-server-gc | 101956.6 | 89.6 | 7809.4 | 109.6 | 576.9 | 231.5 |
-| dotnet-workstation | 113089.5 | 249.1 | 7037.1 | 98.5 | 602.5 | 304.2 |
-| dotnet-workstation-blocking | 112339.3 | 250.4 | 7020.2 | 100.9 | 508.8 | 207.4 |
-| dotnet-heap-limit (128 MiB) | 97517.9 | 90.6 | 7668.9 | 110.0 | 446.5 | 187.2 |
-| dotnet-aot | 92096.4 | 35.0 | 6752.0 | 53.2 | 518.9 | 149.8 |
+| rust | 157886.0 | 4.9 | 9934.8 | 9.0 | 533.8 | 38.8 |
+| dotnet-server-gc | 95544.9 | 90.1 | 7166.6 | 125.9 | 483.9 | 278.2 |
+| dotnet-workstation | 109161.3 | 250.4 | 7930.7 | 211.7 | 484.3 | 521.0 |
+| dotnet-workstation-blocking | 106948.1 | 251.2 | 6344.2 | 105.7 | 475.8 | 270.7 |
+| dotnet-heap-limit (256 MiB) | 93620.1 | 91.1 | 7038.9 | 125.1 | 474.2 | 279.7 |
+| dotnet-aot | 83945.6 | 33.4 | 6254.1 | 74.4 | 466.0 | 211.9 |
 
-p50, p95, p99, and CPU are in `results.md`. Zero HTTP errors. The AOT process logged `server_gc=True concurrent_gc=True`, same GC mode as `dotnet-server-gc`.
+p50, p95, p99, and CPU are in `results.md`. Startup to the first `/health`: Rust 6 ms, AOT 58 ms, JIT 163–190 ms. The AOT image is 16,005,008 bytes.
 
-## Native AOT
+The 256 MiB cap does not separate itself from Server GC at 1 MiB (474.2 vs 483.9 req/s, 279.7 vs 278.2 MiB). A 128 MiB cap, which was enough when the response was a digest, returns HTTP 500 on this full-size 1 MiB response at 32 in-flight requests. That is why the published cap moved.
 
-At 1 KiB, AOT RSS is 35.0 MiB against 89.6 MiB for Server GC JIT, and throughput is 92096.4 against 101956.6 req/s. At 64 KiB the gap is 6752.0 vs 7809.4 req/s and 53.2 vs 109.6 MiB. At 1 MiB it is 518.9 vs 576.9 req/s and 149.8 vs 231.5 MiB. p99 at 1 MiB is 97.919 ms for AOT and 89.023 ms for Server GC JIT.
-
-The three 1 MiB AOT repetitions were 486.9, 518.9, and 535.0 req/s. The median is the middle value, and the series was still rising, so a longer warm-up could land a bit higher. Server GC JIT on the same payload was flat to slightly down (584.4, 576.9, 571.2).
-
-Time from process start to the first `/health`, polled every 20 ms: Rust 6 ms, AOT 33 ms, JIT variants 162–165 ms. The AOT image is 16,004,992 bytes and stands alone. The ReadyToRun publish is a 78,192 byte apphost and a 74,240 byte DLL that need the shared ASP.NET Core runtime, which is not included in those two sizes.
-
-AOT does not reach Rust. 35.0 MiB is still about 7.6 times 4.6 MiB at 1 KiB.
-
-## The other .NET rows, remeasured
-
-Workstation GC was the fastest .NET mode at 1 KiB (113089.5 req/s) and at 1 MiB (602.5 req/s) in this run. RSS was 249.1 MiB and 304.2 MiB. That is the opposite of a memory win. Blocking workstation was close at 1 KiB (112339.3 req/s, 250.4 MiB) and slower at 1 MiB (508.8 req/s, 207.4 MiB).
-
-The 128 MiB hard limit leaves the 1 KiB RSS at 90.6 MiB. At 1 MiB it lowers RSS from 231.5 to 187.2 MiB and throughput from 576.9 to 446.5 req/s, with p99 110.527 ms versus 89.023 ms.
+Workstation GC is again the large heap: 250.4 MiB at 1 KiB and 521.0 MiB at 1 MiB. It was the fastest .NET row at 1 KiB and 64 KiB.
 
 ## Recommendation
 
-Use **dotnet-aot** when the goal is a smaller .NET process and a faster start, and the roughly 10% throughput gap versus Server GC JIT is acceptable. Use **dotnet-server-gc** when steady-state throughput matters more than RSS and the shared runtime is already installed. Workstation GC is not the way to chase the Rust memory number. The heap cap is only useful if the 1 MiB process must stay under about 200 MiB and the throughput cut is acceptable.
+Native AOT remains the .NET build that keeps the smallest resident set (33.4 MiB at 1 KiB, 211.9 MiB at 1 MiB) and the faster start. It is also the slowest .NET row at 1 KiB and 64 KiB. Server GC is the straightforward JIT default and matches workstation at 1 MiB without the 521 MiB heap. The heap cap is not doing useful work at 256 MiB, and a tighter cap fails the full-size 1 MiB payload.

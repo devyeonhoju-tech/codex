@@ -23,9 +23,10 @@ DURATION_SECS="${DURATION_SECS:-10}"
 REPETITIONS="${REPETITIONS:-3}"
 SERVER_CPUS="${SERVER_CPUS:-0,1}"
 CLIENT_CPUS="${CLIENT_CPUS:-2,3}"
-# Hex bytes, no 0x. 0x8000000 = 128 MiB. A 64 MiB cap (0x4000000) returned HTTP 500
-# on the 1 MiB payload at concurrency 32. 128 MiB completed that payload.
-HEAP_LIMIT="${HEAP_LIMIT:-8000000}"
+# Hex bytes, no 0x. 0x10000000 = 256 MiB. The response now echoes the payload, so a
+# 128 MiB cap (0x8000000) returns HTTP 500 on the 1 MiB body at concurrency 32.
+# 64 MiB failed the same way before the response grew. 256 MiB completed a smoke run.
+HEAP_LIMIT="${HEAP_LIMIT:-10000000}"
 
 mkdir -p "$ROOT/bench/results"
 command -v curl >/dev/null

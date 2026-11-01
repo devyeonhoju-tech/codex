@@ -33,6 +33,7 @@ struct RequestDoc {
 #[derive(Debug, Serialize)]
 struct ResponseDoc {
     id: String,
+    data: String,
     checksum: u32,
     length: u32,
     tag: u32,
@@ -64,15 +65,20 @@ pub fn process_plaintext(plaintext: &[u8]) -> Result<Vec<u8>, ProcessError> {
     if id_len == 0 || id_len > MAX_ID_BYTES {
         return Err(ProcessError::InvalidRequest);
     }
-    let data_bytes = data.as_bytes();
-    if data_bytes.len() > MAX_DATA_BYTES {
+    if data.len() > MAX_DATA_BYTES {
         return Err(ProcessError::InvalidRequest);
     }
-    let length = data_bytes.len() as u32;
-    let checksum = fnv1a32(data_bytes);
+    // Hash every byte of the decrypted body, including JSON syntax, then copy
+    // `data` into the response so the ciphertext covers the whole payload.
+    if plaintext.len() > u32::MAX as usize {
+        return Err(ProcessError::InvalidRequest);
+    }
+    let length = plaintext.len() as u32;
+    let checksum = fnv1a32(plaintext);
     let tag = checksum ^ multiplier ^ length;
     let response = ResponseDoc {
         id,
+        data,
         checksum,
         length,
         tag,

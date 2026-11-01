@@ -16,6 +16,7 @@ pub const OVERHEAD: usize = NONCE_LEN + TAG_LEN;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CryptoError {
     Key,
+    MissingNonce,
     Truncated,
     Decrypt,
     Encrypt,
@@ -65,6 +66,10 @@ pub fn seal_with_nonce(
 }
 
 pub fn open(cipher: &Aes256Gcm, wire: &[u8]) -> Result<Vec<u8>, CryptoError> {
+    // The whole body is one frame. A short body is not a plaintext request.
+    if wire.len() < NONCE_LEN {
+        return Err(CryptoError::MissingNonce);
+    }
     if wire.len() < OVERHEAD {
         return Err(CryptoError::Truncated);
     }
@@ -155,7 +160,9 @@ mod tests {
         let last = bad.len() - 1;
         bad[last] ^= 0x01;
         assert_eq!(open(&cipher, &bad), Err(CryptoError::Decrypt));
-        assert_eq!(open(&cipher, &wire[..10]), Err(CryptoError::Truncated));
+        assert_eq!(open(&cipher, &[]), Err(CryptoError::MissingNonce));
+        assert_eq!(open(&cipher, &wire[..10]), Err(CryptoError::MissingNonce));
+        assert_eq!(open(&cipher, &wire[..20]), Err(CryptoError::Truncated));
     }
 
     #[test]

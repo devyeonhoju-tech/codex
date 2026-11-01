@@ -76,7 +76,9 @@ public class ProtocolTests
         wire[^1] ^= 0x01;
         Assert.False(crypto.TryOpen(wire, out _, out string error));
         Assert.Equal("decrypt_failed", error);
-        Assert.False(crypto.TryOpen(new byte[10], out _, out string truncated));
+        Assert.False(crypto.TryOpen(new byte[10], out _, out string missingNonce));
+        Assert.Equal("missing_nonce", missingNonce);
+        Assert.False(crypto.TryOpen(new byte[20], out _, out string truncated));
         Assert.Equal("truncated_message", truncated);
     }
 

@@ -21,6 +21,7 @@ use http_body_util::{BodyExt, Full};
 use hyper::client::conn::http1::handshake;
 use hyper::Request;
 use hyper_util::rt::TokioIo;
+use aes_gcm::Aes256Gcm;
 use rust_service::crypto::cipher;
 use rust_service::{open, parse_key, process_plaintext, seal};
 use serde::{Deserialize, Serialize};
@@ -100,6 +101,7 @@ struct RunRecord {
     rss_peak_mib: f64,
     client_cpu_pct_one_core: f64,
     verified: bool,
+    verified_samples: u64,
     affinity: String,
 }
 
@@ -124,10 +126,12 @@ fn load(args: LoadArgs) -> anyhow::Result<()> {
         .context("BENCH_AES_KEY is required (public benchmark key; see bench/WIRE_FORMAT.md)")?;
     let key =
         parse_key(&key_hex).map_err(|_| anyhow!("BENCH_AES_KEY must be 64 hex characters"))?;
-    let aes = cipher(&key);
+    let aes = Arc::new(cipher(&key));
     let plaintext = request_json(args.payload_bytes);
     let wire = Bytes::from(seal(&aes, &plaintext).map_err(|_| anyhow!("encrypt request failed"))?);
-    let expected = process_plaintext(&plaintext).map_err(|_| anyhow!("build expected response"))?;
+    let expected = Arc::new(
+        process_plaintext(&plaintext).map_err(|_| anyhow!("build expected response"))?,
+    );
     let (host, port, path) = parse_http_url(&args.url)?;
     let host_header = format!("{host}:{port}");
 
@@ -153,6 +157,8 @@ fn load(args: LoadArgs) -> anyhow::Result<()> {
         let host_header = host_header.clone();
         let path = path.clone();
         let host = host.clone();
+        let aes = Arc::clone(&aes);
+        let expected = Arc::clone(&expected);
         joins.push(runtime.spawn(async move {
             worker(
                 host,
@@ -160,6 +166,8 @@ fn load(args: LoadArgs) -> anyhow::Result<()> {
                 host_header,
                 path,
                 wire,
+                aes,
+                expected,
                 origin,
                 warmup,
                 duration,
@@ -171,14 +179,14 @@ fn load(args: LoadArgs) -> anyhow::Result<()> {
     let mut merged = Histogram::<u64>::new_with_bounds(1, 120_000_000, 3)?;
     let mut requests = 0u64;
     let mut errors = 0u64;
-    let mut sample: Option<Bytes> = None;
+    let mut verified_samples = 0u64;
+    let mut sample_failed = false;
     for join in joins {
-        let (hist, ok, err, last) = runtime.block_on(join)??;
+        let (hist, ok, err, samples, failed) = runtime.block_on(join)??;
         requests += ok;
         errors += err;
-        if sample.is_none() {
-            sample = last;
-        }
+        verified_samples += samples;
+        sample_failed |= failed;
         if hist.len() > 0 {
             merged.add(&hist)?;
         }
@@ -187,23 +195,7 @@ fn load(args: LoadArgs) -> anyhow::Result<()> {
         .join()
         .map_err(|_| anyhow!("resource sampler panicked"))??;
 
-    let verified = match sample {
-        Some(body) => {
-            let opened =
-                open(&aes, &body).map_err(|_| anyhow!("sample response did not decrypt"))?;
-            if opened.as_slice() != expected.as_slice() {
-                eprintln!(
-                    "verification mismatch\n got {}\n exp {}",
-                    String::from_utf8_lossy(&opened),
-                    String::from_utf8_lossy(&expected)
-                );
-                false
-            } else {
-                true
-            }
-        }
-        None => false,
-    };
+    let verified = verified_samples > 0 && !sample_failed;
 
     let (p50, p95, p99) = if merged.len() == 0 {
         (0.0, 0.0, 0.0)
@@ -234,6 +226,7 @@ fn load(args: LoadArgs) -> anyhow::Result<()> {
         rss_peak_mib: resources.rss_peak_mib,
         client_cpu_pct_one_core: resources.client_cpu_pct_one_core,
         verified,
+        verified_samples,
         affinity: resources.affinity,
     };
 
@@ -246,7 +239,7 @@ fn load(args: LoadArgs) -> anyhow::Result<()> {
         .open(&args.output)?;
     writeln!(file, "{}", serde_json::to_string(&record)?)?;
     println!(
-        "{} payload={} rep={} rps={:.1} p50={:.3}ms p99={:.3}ms cpu={:.1}% rss={:.1}MiB errors={} verified={}",
+        "{} payload={} rep={} rps={:.1} p50={:.3}ms p99={:.3}ms cpu={:.1}% rss={:.1}MiB errors={} verified={} samples={}",
         record.service,
         record.payload_bytes,
         record.repetition,
@@ -256,7 +249,8 @@ fn load(args: LoadArgs) -> anyhow::Result<()> {
         record.cpu_pct_one_core,
         record.rss_avg_mib,
         record.errors,
-        record.verified
+        record.verified,
+        record.verified_samples
     );
 
     if errors > 0 || !verified || requests == 0 {
@@ -299,16 +293,19 @@ async fn worker(
     host_header: String,
     path: String,
     body: Arc<Bytes>,
+    cipher: Arc<Aes256Gcm>,
+    expected: Arc<Vec<u8>>,
     origin: Instant,
     warmup: Duration,
     duration: Duration,
-) -> anyhow::Result<(Histogram<u64>, u64, u64, Option<Bytes>)> {
+) -> anyhow::Result<(Histogram<u64>, u64, u64, u64, bool)> {
     let measure_end = origin + warmup + duration;
     let warmup_end = origin + warmup;
     let mut hist = Histogram::<u64>::new_with_bounds(1, 120_000_000, 3)?;
     let mut ok = 0u64;
     let mut err = 0u64;
-    let mut last = None;
+    let mut samples = 0u64;
+    let mut sample_failed = false;
     let mut live = connect(&host, port).await?;
     while Instant::now() < measure_end {
         let started = Instant::now();
@@ -318,10 +315,22 @@ async fn worker(
         match result {
             Ok(bytes) => {
                 if in_window && finished <= measure_end {
-                    let us = started.elapsed().as_micros().clamp(1, 120_000_000) as u64;
-                    hist.record(us)?;
-                    ok += 1;
-                    last = Some(bytes);
+                    // Every 32nd measured response is decrypted and compared in full
+                    // before it counts. The server has no path that skips that work.
+                        if ok % 32 == 0 && !full_match(&cipher, expected.as_slice(), &bytes) {
+                        err += 1;
+                        sample_failed = true;
+                        if err <= 3 {
+                            eprintln!("full response verification failed");
+                        }
+                    } else {
+                        if ok % 32 == 0 {
+                            samples += 1;
+                        }
+                        let us = started.elapsed().as_micros().clamp(1, 120_000_000) as u64;
+                        hist.record(us)?;
+                        ok += 1;
+                    }
                 }
             }
             Err(error) => {
@@ -338,7 +347,14 @@ async fn worker(
             }
         }
     }
-    Ok((hist, ok, err, last))
+    Ok((hist, ok, err, samples, sample_failed))
+}
+
+fn full_match(cipher: &Aes256Gcm, expected: &[u8], wire: &[u8]) -> bool {
+    match open(cipher, wire) {
+        Ok(plain) => plain.len() == expected.len() && plain.as_slice() == expected,
+        Err(_) => false,
+    }
 }
 
 struct Live {
@@ -592,7 +608,7 @@ fn report(args: ReportArgs) -> anyhow::Result<()> {
             fmt_metric(run.rss_avg_mib, 1),
             fmt_metric(run.rss_peak_mib, 1),
             if run.affinity.is_empty() { "-".to_string() } else { run.affinity.clone() },
-            run.verified
+            format!("{} ({})", run.verified, run.verified_samples)
         ));
     }
 
@@ -632,14 +648,14 @@ Summary values are the **median of {reps} repetitions**. Each repetition is a cl
 ## How this was measured
 
 - Load generator: `crypto-bench` (this repo), Hyper HTTP/1.1 keep-alive, one connection per in-flight request, TCP_NODELAY, HDR histogram of client latency.
-- The request body is encrypted once and repeated. That reuses a GCM nonce, which is not safe in production; it keeps the bytes identical. Services still pick a new nonce for every response. One response per repetition is decrypted and compared to the expected JSON.
+- The request body is encrypted once and repeated. That reuses a GCM nonce, which is not safe in production; it keeps the bytes identical. Services still pick a new nonce for every response. During the measured window every 32nd success is decrypted and compared, in full, to the expected plaintext (length and bytes). A run with zero full matches fails.
 - Linux affinity during `run.sh`: server on CPUs 0-1, load generator on CPUs 2-3. They still share memory bandwidth, last-level cache, and the hypervisor.
 - No TLS. The work is HTTP framing, AES-256-GCM, JSON, and the FNV-1a step.
 - Rust: release profile, thin LTO, codegen-units = 1, axum/tokio, RustCrypto `aes-gcm` with runtime AES-NI detection. Not `target-cpu=native`.
 - .NET 10 baseline (`dotnet-server-gc`): `dotnet publish -c Release`, framework-dependent, ReadyToRun, Server GC, background GC, tiered PGO, invariant globalization.
 - `dotnet-workstation`: same binary, `DOTNET_gcServer=0` (background GC stays on).
 - `dotnet-workstation-blocking`: second publish with `ServerGarbageCollection=false` and `ConcurrentGarbageCollection=false`. `DOTNET_gcConcurrent=0` does not override `System.GC.Concurrent` when that property is already in runtimeconfig.json.
-- `dotnet-heap-limit`: Server GC baseline plus `DOTNET_GCHeapHardLimit` (hex bytes, value in `environment.txt`). 128 MiB. A 64 MiB cap returned HTTP 500 on the 1 MiB payload.
+- `dotnet-heap-limit`: Server GC baseline plus `DOTNET_GCHeapHardLimit` (hex bytes, value in `environment.txt`). 256 MiB. A 128 MiB cap returns HTTP 500 once the response echoes a 1 MiB payload at 32 in-flight requests.
 - `dotnet-aot`: Native AOT publish of the same program (`PublishAot=true`, ReadyToRun off for that publish), Server GC and background GC. Request and response JSON go through `ProtocolJsonContext`. The JIT variants use that context too, so they are remeasured with it. If publish fails, there is no AOT row and `bench/results/aot-publish.txt` has the error.
 - Warm-up is short. Three repetitions and the median are there so a single cold run does not decide the row.
 
@@ -669,10 +685,10 @@ A 4-vCPU guest cannot say which language is faster in production. Use this as a 
     }
     std::fs::write(&args.markdown, markdown)?;
 
-    let mut csv = String::from("service,payload_bytes,http_body_bytes,repetition,concurrency,warmup_secs,duration_secs,requests,errors,rps,p50_ms,p95_ms,p99_ms,cpu_pct_one_core,rss_avg_mib,rss_peak_mib,client_cpu_pct_one_core,verified,affinity\n");
+    let mut csv = String::from("service,payload_bytes,http_body_bytes,repetition,concurrency,warmup_secs,duration_secs,requests,errors,rps,p50_ms,p95_ms,p99_ms,cpu_pct_one_core,rss_avg_mib,rss_peak_mib,client_cpu_pct_one_core,verified,verified_samples,affinity\n");
     for run in &ordered {
         csv.push_str(&format!(
-            "{},{},{},{},{},{},{},{},{},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{},{}\n",
+            "{},{},{},{},{},{},{},{},{},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{},{},{}\n",
             run.service,
             run.payload_bytes,
             run.http_body_bytes,
@@ -691,6 +707,7 @@ A 4-vCPU guest cannot say which language is faster in production. Use this as a 
             run.rss_peak_mib,
             run.client_cpu_pct_one_core,
             run.verified,
+            run.verified_samples,
             run.affinity
         ));
     }

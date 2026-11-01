@@ -42,6 +42,7 @@ async fn process_request(State(state): State<AppState>, body: Bytes) -> Response
     }
     let plaintext = match crypto::open(&state.cipher, &body) {
         Ok(plaintext) => plaintext,
+        Err(CryptoError::MissingNonce) => return error(StatusCode::BAD_REQUEST, "missing_nonce"),
         Err(CryptoError::Truncated) => return error(StatusCode::BAD_REQUEST, "truncated_message"),
         Err(_) => return error(StatusCode::BAD_REQUEST, "decrypt_failed"),
     };
@@ -118,10 +119,32 @@ mod tests {
         assert_eq!(status, StatusCode::OK);
         assert_eq!(content_type, "application/octet-stream");
         let plain = crypto::open(&cipher, &body).unwrap();
-        assert_eq!(
-            std::str::from_utf8(&plain).unwrap(),
-            r#"{"id":"hello","checksum":1335831723,"length":5,"tag":1335831725}"#
-        );
+        let expected = crate::process::process_plaintext(request).unwrap();
+        assert_eq!(plain, expected);
+        assert!(plain.len() > request.len());
+    }
+
+    #[tokio::test]
+    async fn rejects_plaintext_and_incomplete_frames() {
+        let app = router(&key());
+        let plaintext = br#"{"id":"hello","data":"hello","multiplier":3}"#;
+        let (status, _, body) = call(app.clone(), plaintext.to_vec()).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(body, br#"{"error":"decrypt_failed"}"#);
+
+        let (status, _, body) = call(app.clone(), vec![0; 11]).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(body, br#"{"error":"missing_nonce"}"#);
+
+        let (status, _, body) = call(app.clone(), vec![0; 20]).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(body, br#"{"error":"truncated_message"}"#);
+
+        let other = crypto::cipher(&[0x11; 32]);
+        let wire = crypto::seal(&other, plaintext).unwrap();
+        let (status, _, body) = call(app, wire).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(body, br#"{"error":"decrypt_failed"}"#);
     }
 
     #[tokio::test]

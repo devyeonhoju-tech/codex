@@ -122,8 +122,8 @@ function Invoke-Variant($Name, $Exe, $BaseUrl) {
   }
 }
 
-# 0x8000000 = 128 MiB. Same default as bench/run.sh.
-if (-not $env:HEAP_LIMIT) { $env:HEAP_LIMIT = "8000000" }
+# 0x10000000 = 256 MiB. Same default as bench/run.sh.
+if (-not $env:HEAP_LIMIT) { $env:HEAP_LIMIT = "10000000" }
 Add-Content "$Root\bench\results\environment.txt" "gc_heap_hard_limit_hex=$($env:HEAP_LIMIT)"
 
 Write-Host "native AOT publish"

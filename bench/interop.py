@@ -31,6 +31,32 @@ def encrypt(aes: AESGCM, plaintext: bytes) -> bytes:
     return nonce + aes.encrypt(nonce, plaintext, None)
 
 
+def fnv1a32(data: bytes) -> int:
+    hash_value = 2166136261
+    for byte in data:
+        hash_value ^= byte
+        hash_value = (hash_value * 16777619) & 0xFFFFFFFF
+    return hash_value
+
+
+def full_response(plaintext: bytes) -> bytes:
+    parsed = json.loads(plaintext)
+    checksum = fnv1a32(plaintext)
+    length = len(plaintext)
+    tag = (checksum ^ parsed["multiplier"] ^ length) & 0xFFFFFFFF
+    return json.dumps(
+        {
+            "id": parsed["id"],
+            "data": parsed["data"],
+            "checksum": checksum,
+            "length": length,
+            "tag": tag,
+        },
+        separators=(",", ":"),
+        ensure_ascii=False,
+    ).encode("utf-8")
+
+
 def decrypt(aes: AESGCM, wire: bytes) -> bytes:
     if len(wire) < 28:
         raise AssertionError(f"truncated wire ({len(wire)} bytes)")
@@ -90,15 +116,45 @@ def main() -> int:
             return 1
         print(f"ok {case['name']}")
 
+    for size in (1024, 65536, 1048576):
+        plain = b'{"id":"bench","data":"' + (b"x" * size) + b'","multiplier":1}'
+        expected = full_response(plain)
+        wire = encrypt(aes, plain)
+        for name, base in services:
+            status, body, content_type = request(base + "/v1/process", wire, "application/octet-stream")
+            if status != 200 or not content_type.startswith("application/octet-stream"):
+                print(f"{name} payload {size} HTTP {status} {body[:120]!r}", file=sys.stderr)
+                return 1
+            opened_body = decrypt(aes, body)
+            if len(opened_body) != len(expected) or opened_body != expected:
+                print(
+                    f"{name} payload {size} full response mismatch len {len(opened_body)} != {len(expected)}",
+                    file=sys.stderr,
+                )
+                return 1
+            if size > len(opened_body):
+                print(f"{name} payload {size} response shorter than the payload", file=sys.stderr)
+                return 1
+        print(f"ok full {size}")
+
     tamper_src = encrypt(aes, vectors["cases"][1]["requestJson"].encode("utf-8"))
     bad = bytearray(tamper_src)
     bad[-1] ^= 0x01
+    chopped = bytes(tamper_src[:-10])
     not_json = encrypt(aes, b"not-json")
     missing = encrypt(aes, b'{"id":"a","multiplier":1}')
+    wrong_key = AESGCM(b"\x11" * 32)
+    wrong = encrypt(wrong_key, vectors["cases"][1]["requestJson"].encode("utf-8"))
+    plaintext_body = vectors["cases"][1]["requestJson"].encode("utf-8")
     probes = (
         ("tamper", bytes(bad), "decrypt_failed"),
+        ("truncated-ciphertext", chopped, "decrypt_failed"),
+        ("truncated-frame", b"\x00" * 20, "truncated_message"),
         ("not-json", not_json, "invalid_json"),
         ("missing-field", missing, "invalid_request"),
+        ("wrong-key", wrong, "decrypt_failed"),
+        ("missing-nonce", b"\x00" * 11, "missing_nonce"),
+        ("plaintext-body", plaintext_body, "decrypt_failed"),
     )
     for label, wire, code in probes:
         for name, base in services:
