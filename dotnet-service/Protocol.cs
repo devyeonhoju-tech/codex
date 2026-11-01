@@ -49,6 +49,15 @@ public static class Protocol
 
     public static bool TryProcess(ReadOnlySpan<byte> plaintext, out byte[] response, out string error)
     {
+        return TryProcess(plaintext, null, out response, out error);
+    }
+
+    public static bool TryProcess(
+        ReadOnlySpan<byte> plaintext,
+        IReadOnlyList<DownstreamSlot>? downstream,
+        out byte[] response,
+        out string error)
+    {
         response = Array.Empty<byte>();
         ProcessRequest? request;
         try
@@ -93,7 +102,7 @@ public static class Protocol
         uint checksum = Fnv1a32(plaintext);
         uint tag = checksum ^ request.Multiplier.Value ^ length;
         response = JsonSerializer.SerializeToUtf8Bytes(
-            new ProcessResponse(request.Id, request.Data, checksum, length, tag),
+            new ProcessResponse(request.Id, request.Data, checksum, length, tag, downstream?.ToList()),
             Context.ProcessResponse);
         error = "";
         return true;
@@ -107,7 +116,24 @@ public sealed class ProcessRequest
     public uint? Multiplier { get; set; }
 }
 
-public sealed record ProcessResponse(string Id, string Data, uint Checksum, uint Length, uint Tag);
+public sealed record ProcessResponse(
+    string Id,
+    string Data,
+    uint Checksum,
+    uint Length,
+    uint Tag,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    List<DownstreamSlot>? Downstream = null);
+
+public sealed record DownstreamSlot(string Name, int Status, string Body);
+
+public static class DownstreamBodies
+{
+    public static string MockBody(string name, int padLength)
+    {
+        return $"{{\"endpoint\":\"{name}\",\"pad\":\"{new string('x', padLength)}\"}}";
+    }
+}
 
 [JsonSourceGenerationOptions(
     PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase,
@@ -115,4 +141,6 @@ public sealed record ProcessResponse(string Id, string Data, uint Checksum, uint
     WriteIndented = false)]
 [JsonSerializable(typeof(ProcessRequest))]
 [JsonSerializable(typeof(ProcessResponse))]
+[JsonSerializable(typeof(DownstreamSlot))]
+[JsonSerializable(typeof(List<DownstreamSlot>))]
 public partial class ProtocolJsonContext : JsonSerializerContext;

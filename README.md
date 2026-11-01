@@ -143,7 +143,20 @@ powershell -ExecutionPolicy Bypass -File bench\run.ps1
 
 The script runs dev-profile unit tests, checks the shared vectors against Python, builds the release binaries, and runs `bench/interop.py` against those binaries. That client is Python `cryptography` (OpenSSL), not either service. It sends one ciphertext to both processes and requires the decrypted responses to match the vector file, including tampered input and bad JSON.
 
-It then load-tests one service at a time:
+`bash bench/run-fanout.sh` is a separate matrix. After the same correctness checks it starts `crypto-bench mock` (five loopback `POST /v1/{a,b,c,d,e}` endpoints) and measures baseline (no downstream), five concurrent calls, and a smaller sequential and jitter slice. It does not replace `run.sh`. It skips the 1 MiB payload, the heap cap, and blocking workstation GC. The mock is pinned to the same CPUs as the load generator, so those rates are indicative.
+
+| Knob | `run-fanout.sh` |
+| --- | --- |
+| `data` length | 1024 and 65536 bytes. Sequential and jitter are 1024 only |
+| In-flight requests | 32, 256, and 1024. Sequential and jitter are 32 only |
+| Downstream | off, then five calls at a fixed 20 ms and 100 ms. Jitter is 20 ms plus a uniform 0..=30 ms |
+| Mock body | `{"endpoint":"<name>","pad":"<128 x>"}` |
+| Warm-up, window, repetitions | 5 s, 10 s, 3, median, same as `run.sh` |
+| Variants | Rust, Server GC, Workstation GC (background on), Native AOT |
+
+Outputs from that script: `bench/results/fanout-results.md`, `fanout-results.csv`, `fanout-runs.jsonl`, `fanout-environment.txt`. A short reading of those medians is in [bench/results/FANOUT_OBSERVATIONS.md](bench/results/FANOUT_OBSERVATIONS.md).
+
+`bench/run.sh` then load-tests one service at a time:
 
 | Knob | Default |
 | --- | --- |
@@ -182,22 +195,37 @@ Time to the first `/health` (20 ms poll): Rust 6 ms, Native AOT 58 ms, JIT varia
 
 Native AOT is still the smaller .NET process (33.4 MiB at 1 KiB, 211.9 MiB at 1 MiB) and the slower one on throughput. Workstation GC was fastest among the .NET rows at 1 KiB and 64 KiB and tied Server GC at 1 MiB, with a 521.0 MiB resident set at 1 MiB. The heap cap is 256 MiB for this run. 128 MiB returned HTTP 500 once the response echoed a 1 MiB payload at 32 in-flight requests, and at 256 MiB the 1 MiB RSS (279.7 MiB) matches uncapped Server GC (278.2 MiB), so the cap is not binding on that row.
 
+## Five downstream calls
+
+`bench/run-fanout.sh` measured the same services after each decrypted request also POSTs that plaintext to five local endpoints and encrypts the aggregated response. Cells below are medians from [bench/results/fanout-results.md](bench/results/fanout-results.md). Every repetition had zero HTTP errors, and every 32nd success was decrypted and matched in full. The mock and the load generator shared CPUs 2-3, so treat the absolute rates as indicative. `fanout-environment.txt` records `git=7d4847e` because that was HEAD when the script started; the binaries were this working tree.
+
+At concurrency 32 and 1 KiB, adding the five calls removes the CPU-bound gap. Baseline (no downstream) is still Rust ahead: 131759.8 req/s, p50 0.234 ms, RSS 5.4 MiB, against Server GC 94958.6 / 0.304 ms / 91.5 MiB, Workstation 106982.0 / 0.299 ms / 252.1 MiB, and Native AOT 84978.9 / 0.341 ms / 37.5 MiB, all near 200% CPU. With five concurrent calls at 20 ms the four rows sit at 1430.7–1442.0 req/s and p50 22.1–22.3 ms, using about 20–24% CPU. At 100 ms every row is 310.4 req/s and p50 102.2–102.4 ms, about 5–6% CPU. That is the mock delay times 32 in-flight requests, not the language. RSS still separates them at 100 ms: Rust 13.6 MiB, AOT 59.8, Server GC 123.4, Workstation 254.0.
+
+Sequential mode is the delay times five. At 100 ms every stack does 60.8 req/s with p50 about 509 ms. At 20 ms the rows are 291.2–294.4 req/s with p50 107–109 ms. The jitter row (20 ms plus 0..=30 ms) is 681.2–682.5 req/s, p50 about 47.9 ms, again the same for all four.
+
+Higher concurrency is where the stacks split, and not all in one direction. At 1 KiB, 1024 in flight, and a 100 ms mock, Rust stays on the delay: 9757.0 req/s, p50 103.615 ms, p99 109.631 ms, 158.5% CPU, RSS 271.7 MiB. Server GC is 3819.6 req/s, p50 261.503 ms, p99 329.727 ms, 55.1% CPU. AOT is 3788.8 and Workstation is 3693.7, with p50 261.6 ms and 280.6 ms. .NET is leaving cores idle and queueing. At the same concurrency with a 20 ms mock the client and the mock are the tight resource, and Server GC completes more requests than Rust: 14357.8 req/s, p50 70.207 ms, p99 97.087 ms, against Rust 12078.3 req/s, p50 32.111 ms, p99 252.671 ms. Rust's median is lower and its tail is much worse, so its throughput is lower. At 64 KiB and 1024 in flight everyone is near two busy cores and the req/s gap shrinks (Rust 2449.7 vs Server GC 2237.3 at 100 ms) while tails and RSS are both large.
+
+At 64 KiB and concurrency 32 the baseline is still CPU-bound (Rust 9184.0 req/s, RSS 30.9 MiB; Server GC 7180.1 / 129.9). A 100 ms fan-out pulls everyone to 305.1–307.6 req/s. A 20 ms fan-out leaves a smaller Rust lead: 1379.6 vs Server GC 1260.7, AOT 1216.1, Workstation 1158.2. On that 64 KiB fan-out the Rust resident set is no longer the small one (233.0 MiB at 100 ms, 187.7 MiB at 20 ms, against Server GC 133.9 and 138.6).
+
+The earlier table in this file is a different run (`results.md`: 1 MiB, heap cap, blocking workstation, concurrency 32 only). Do not mix those req/s with this matrix. The 1 KiB Rust baseline here is 131759.8, not the 157886.0 from that earlier file.
+
 ## Tests without a load run
 
 ```bash
 cargo test -p rust-service
 dotnet test dotnet-service/tests/CryptoBench.Tests.csproj -c Release
 python3 bench/check_vectors.py
-cargo build -p rust-service
+cargo build -p rust-service -p crypto-bench
 dotnet publish dotnet-service/CryptoBench.csproj -c Release -o dotnet-service/publish
 bash bench/interop_servers.sh target/debug/rust-service dotnet-service/publish/cryptobench
+bash bench/interop_downstream.sh target/debug/rust-service target/debug/crypto-bench dotnet-service/publish/cryptobench
 ```
 
-Rust tests include the HTTP handler (encrypt, post, decrypt). .NET tests cover the cipher and the JSON step against the same files. The Python script is what proves the two processes agree with each other and with a third implementation.
+Rust tests include the HTTP handler (encrypt, post, decrypt), the five-call aggregate, a downstream 5xx, and a downstream timeout. .NET tests cover the cipher, the JSON step, baseline omission of `downstream`, the five-call order, a non-2xx, and a timeout. Both services answer those failures with HTTP 502 and plaintext `{"error":"downstream_failed"}`. The Python scripts prove the two processes agree with each other and with a third implementation. CI runs these checks and does not run `bench/run.sh` or `bench/run-fanout.sh`.
 
 ## Limits
 
-These are localhost numbers from one machine. They include HTTP, AES-GCM, and a small JSON transform. They are not a language ranking, not a TLS test, and not a pure cipher microbenchmark.
+These are localhost numbers from one machine. The crypto-only run includes HTTP, AES-GCM, and a JSON transform. The fan-out run adds five loopback REST calls to a mock that shares the VM with the load generator. They are not a language ranking, not a TLS test, and not a pure cipher microbenchmark.
 
 The load generator encrypts one request and resends those bytes. Reusing a GCM nonce is unsafe in production; it only keeps the request body identical. Each response still uses a new nonce. During the measured window every 32nd success is decrypted and compared in full.
 

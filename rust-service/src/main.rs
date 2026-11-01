@@ -3,7 +3,10 @@
 use std::net::SocketAddr;
 
 use axum::serve::ListenerExt;
-use rust_service::{aes_ni_available, parse_key, router, CryptoError};
+use std::time::Duration;
+
+use rust_service::downstream::DownstreamClient;
+use rust_service::{aes_ni_available, parse_key, router_with, CryptoError};
 
 fn main() {
     let key_hex = std::env::var("BENCH_AES_KEY").unwrap_or_else(|_| {
@@ -40,9 +43,42 @@ fn main() {
                 .unwrap_or(1)
         });
 
+    let downstream = match std::env::var("BENCH_DOWNSTREAM_URLS") {
+        Ok(raw) if !raw.trim().is_empty() => {
+            let urls: Vec<String> = raw
+                .split(',')
+                .map(|part| part.trim().to_string())
+                .filter(|part| !part.is_empty())
+                .collect();
+            let sequential = matches!(
+                std::env::var("BENCH_DOWNSTREAM_MODE").ok().as_deref(),
+                Some("sequential")
+            );
+            let timeout_ms = std::env::var("BENCH_DOWNSTREAM_TIMEOUT_MS")
+                .ok()
+                .and_then(|value| value.parse().ok())
+                .unwrap_or(2_000u64);
+            match DownstreamClient::new(urls, sequential, Duration::from_millis(timeout_ms)) {
+                Ok(client) => {
+                    eprintln!(
+                        "downstream_mode={} timeout_ms={timeout_ms}",
+                        if sequential { "sequential" } else { "concurrent" }
+                    );
+                    Some(client)
+                }
+                Err(err) => {
+                    eprintln!("{err}");
+                    std::process::exit(1);
+                }
+            }
+        }
+        _ => None,
+    };
+
     eprintln!(
-        "listening http://{addr} tokio_worker_threads={worker_threads} aes_ni={} pid={}",
+        "listening http://{addr} tokio_worker_threads={worker_threads} aes_ni={} downstream={} pid={}",
         aes_ni_available(),
+        downstream.is_some(),
         std::process::id()
     );
 
@@ -62,7 +98,7 @@ fn main() {
             .tap_io(|stream| {
                 let _ = stream.set_nodelay(true);
             });
-        axum::serve(listener, router(&key))
+        axum::serve(listener, router_with(&key, downstream))
             .await
             .unwrap_or_else(|err| {
                 eprintln!("server error: {err}");

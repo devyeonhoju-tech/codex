@@ -13,6 +13,7 @@ _site/
 dotnet-service/publish/
 dotnet-service/publish-aot/
 dotnet-service/publish-ws-blocking/
+dotnet-service/publish-workstation/
 **/bin/
 **/obj/
 __pycache__/

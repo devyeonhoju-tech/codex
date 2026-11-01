@@ -1,6 +1,6 @@
 name: bench-services
 
-# Build and correctness only. The timed load test is bench/run.sh and is not run here.
+# Build and correctness only. The timed load tests are bench/run.sh and bench/run-fanout.sh and are not run here.
 on:
   push:
   pull_request:
@@ -24,9 +24,11 @@ jobs:
         run: dotnet test dotnet-service/tests/CryptoBench.Tests.csproj -c Release --nologo
       - name: Shared vectors
         run: python3 bench/check_vectors.py
-      - name: Build both services
+      - name: Build services and the local mock
         run: |
-          cargo build -p rust-service
+          cargo build -p rust-service -p crypto-bench
           dotnet publish dotnet-service/CryptoBench.csproj -c Release -o dotnet-service/publish --nologo
       - name: Cross-service interop
         run: bash bench/interop_servers.sh target/debug/rust-service dotnet-service/publish/cryptobench
+      - name: Downstream fan-out interop
+        run: bash bench/interop_downstream.sh target/debug/rust-service target/debug/crypto-bench dotnet-service/publish/cryptobench

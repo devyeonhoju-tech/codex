@@ -30,6 +30,13 @@ struct RequestDoc {
     multiplier: Option<u32>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct DownstreamReply {
+    pub name: String,
+    pub status: u16,
+    pub body: String,
+}
+
 #[derive(Debug, Serialize)]
 struct ResponseDoc {
     id: String,
@@ -37,6 +44,8 @@ struct ResponseDoc {
     checksum: u32,
     length: u32,
     tag: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    downstream: Option<Vec<DownstreamReply>>,
 }
 
 /// FNV-1a 32-bit. Offset basis 2166136261, prime 16777619.
@@ -50,6 +59,23 @@ pub fn fnv1a32(bytes: &[u8]) -> u32 {
 }
 
 pub fn process_plaintext(plaintext: &[u8]) -> Result<Vec<u8>, ProcessError> {
+    finish(plaintext, None)
+}
+
+pub fn process_with_downstream(
+    plaintext: &[u8],
+    downstream: &[DownstreamReply],
+) -> Result<Vec<u8>, ProcessError> {
+    finish(plaintext, Some(downstream))
+}
+
+/// Deterministic mock body. `pad` is `pad_len` ASCII `x` characters.
+pub fn mock_downstream_body(name: &str, pad_len: usize) -> String {
+    let pad = "x".repeat(pad_len);
+    format!("{{\"endpoint\":\"{name}\",\"pad\":\"{pad}\"}}")
+}
+
+fn finish(plaintext: &[u8], downstream: Option<&[DownstreamReply]>) -> Result<Vec<u8>, ProcessError> {
     let request: RequestDoc =
         serde_json::from_slice(plaintext).map_err(|_| ProcessError::InvalidJson)?;
     let Some(id) = request.id else {
@@ -82,6 +108,7 @@ pub fn process_plaintext(plaintext: &[u8]) -> Result<Vec<u8>, ProcessError> {
         checksum,
         length,
         tag,
+        downstream: downstream.map(|parts| parts.to_vec()),
     };
     serde_json::to_vec(&response).map_err(|_| ProcessError::InvalidJson)
 }
