@@ -1,0 +1,49 @@
+name: mssql-ingest
+
+# Build both ingest services and run a short smoke load. The 60s / 1000 rps
+# run is mssql-ingest/scripts/measure.sh and is not run here.
+on:
+  pull_request:
+    paths:
+      - "mssql-ingest/**"
+      - ".github/workflows/mssql-ingest.yml"
+  push:
+    paths:
+      - "mssql-ingest/**"
+      - ".github/workflows/mssql-ingest.yml"
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    services:
+      mssql:
+        image: mcr.microsoft.com/mssql/server:2022-latest
+        env:
+          ACCEPT_EULA: "Y"
+          MSSQL_SA_PASSWORD: "Ingest_CI_Only1!"
+          MSSQL_PID: Developer
+          MSSQL_MEMORY_LIMIT_MB: "2048"
+        ports:
+          - 1433:1433
+        options: >-
+          --shm-size=1g
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.99.1"
+      - name: Unit tests
+        run: |
+          dotnet test mssql-ingest/dotnet/tests/MssqlIngest.Tests.csproj -c Release --nologo
+          cargo test --manifest-path mssql-ingest/rust/Cargo.toml
+      - name: Smoke load
+        env:
+          MSSQL_PASSWORD: Ingest_CI_Only1!
+          STRICT: "1"
+        run: |
+          bash mssql-ingest/scripts/measure.sh dotnet batch smoke
+          bash mssql-ingest/scripts/measure.sh rust batch smoke

@@ -1,0 +1,33 @@
+# Local and CI SQL Server for the ingest benchmark.
+# The password default is a throwaway for local use only. Override MSSQL_SA_PASSWORD.
+# Do not point this at a real instance and do not commit a real password.
+
+name: mssql-ingest
+
+services:
+  mssql:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: ${MSSQL_SA_PASSWORD:-Ingest_Local_Dev1!}
+      MSSQL_PID: Developer
+      MSSQL_MEMORY_LIMIT_MB: ${MSSQL_MEMORY_LIMIT_MB:-2048}
+    ports:
+      - "${MSSQL_PORT:-1433}:1433"
+    volumes:
+      - mssql-data:/var/opt/mssql
+      - ./sql:/seed:ro
+    shm_size: "1gb"
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P \"$$MSSQL_SA_PASSWORD\" -C -Q \"SELECT 1\" || exit 1",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 40s
+
+volumes:
+  mssql-data:

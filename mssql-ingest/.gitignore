@@ -1,0 +1,6 @@
+.env
+.tools/
+results/*
+!results/measurements.md
+dotnet/publish/
+rust/target/
