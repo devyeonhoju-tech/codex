@@ -1,6 +1,6 @@
 name: bench-services
 
-# Build and correctness only. The timed load test is bench/run.sh and is not run here.
+# Build and correctness only. The timed load tests are bench/run.sh and bench/run-fanout.sh and are not run here.
 on:
   push:
   pull_request:
