@@ -12,6 +12,7 @@ use axum::routing::{get, post};
 use axum::Router;
 
 use crate::crypto::{self, CryptoError};
+use crate::downstream::DownstreamClient;
 use crate::process::{self, ProcessError};
 
 pub const MAX_BODY: usize = 8 * 1024 * 1024;
@@ -19,11 +20,17 @@ pub const MAX_BODY: usize = 8 * 1024 * 1024;
 #[derive(Clone)]
 pub struct AppState {
     cipher: Arc<Aes256Gcm>,
+    downstream: Option<Arc<DownstreamClient>>,
 }
 
 pub fn router(key: &[u8; crypto::KEY_LEN]) -> Router {
+    router_with(key, None)
+}
+
+pub fn router_with(key: &[u8; crypto::KEY_LEN], downstream: Option<DownstreamClient>) -> Router {
     let state = AppState {
         cipher: Arc::new(crypto::cipher(key)),
+        downstream: downstream.map(Arc::new),
     };
     Router::new()
         .route("/health", get(health))
@@ -46,11 +53,25 @@ async fn process_request(State(state): State<AppState>, body: Bytes) -> Response
         Err(CryptoError::Truncated) => return error(StatusCode::BAD_REQUEST, "truncated_message"),
         Err(_) => return error(StatusCode::BAD_REQUEST, "decrypt_failed"),
     };
-    let response_plain = match process::process_plaintext(&plaintext) {
-        Ok(body) => body,
-        Err(ProcessError::InvalidJson) => return error(StatusCode::BAD_REQUEST, "invalid_json"),
-        Err(ProcessError::InvalidRequest) => {
-            return error(StatusCode::BAD_REQUEST, "invalid_request")
+    let response_plain = if let Some(downstream) = &state.downstream {
+        let parts = match downstream.call_all(plaintext.clone()).await {
+            Ok(parts) => parts,
+            Err(()) => return error(StatusCode::BAD_GATEWAY, "downstream_failed"),
+        };
+        match process::process_with_downstream(&plaintext, &parts) {
+            Ok(body) => body,
+            Err(ProcessError::InvalidJson) => return error(StatusCode::BAD_REQUEST, "invalid_json"),
+            Err(ProcessError::InvalidRequest) => {
+                return error(StatusCode::BAD_REQUEST, "invalid_request")
+            }
+        }
+    } else {
+        match process::process_plaintext(&plaintext) {
+            Ok(body) => body,
+            Err(ProcessError::InvalidJson) => return error(StatusCode::BAD_REQUEST, "invalid_json"),
+            Err(ProcessError::InvalidRequest) => {
+                return error(StatusCode::BAD_REQUEST, "invalid_request")
+            }
         }
     };
     match crypto::seal(&state.cipher, &response_plain) {
@@ -179,5 +200,118 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(&body[..], b"ok");
+    }
+
+    fn mock_app(fail: Option<&'static str>) -> Router {
+        use axum::extract::{Path, State};
+        #[derive(Clone)]
+        struct Fail(Option<&'static str>);
+        async fn hit(State(fail): State<Fail>, Path(name): Path<String>) -> Response {
+            if fail.0 == Some("slow") && name == "e" {
+                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+            }
+            if fail.0.is_some_and(|want| want == name) {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    [("content-type", "application/json")],
+                    "{\"error\":\"boom\"}",
+                )
+                    .into_response();
+            }
+            (
+                StatusCode::OK,
+                [("content-type", "application/json")],
+                crate::mock_downstream_body(&name, 4),
+            )
+                .into_response()
+        }
+        Router::new()
+            .route("/v1/{name}", post(hit))
+            .with_state(Fail(fail))
+    }
+
+    async fn spawn_mock(fail: Option<&'static str>) -> (String, tokio::task::JoinHandle<()>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let handle = tokio::spawn(async move {
+            axum::serve(listener, mock_app(fail)).await.unwrap();
+        });
+        (format!("http://127.0.0.1:{port}"), handle)
+    }
+
+    #[tokio::test]
+    async fn aggregates_five_downstream_calls_in_order() {
+        let (base, _mock) = spawn_mock(None).await;
+        let urls: Vec<String> = ["a", "b", "c", "d", "e"]
+            .into_iter()
+            .map(|name| format!("{base}/v1/{name}"))
+            .collect();
+        let downstream = crate::downstream::DownstreamClient::new(
+            urls,
+            false,
+            std::time::Duration::from_secs(2),
+        )
+        .unwrap();
+        let app = router_with(&key(), Some(downstream));
+        let cipher = crypto::cipher(&key());
+        let request = br#"{"id":"hello","data":"hello","multiplier":3}"#;
+        let wire = crypto::seal(&cipher, request).unwrap();
+        let (status, _, body) = call(app, wire).await;
+        assert_eq!(status, StatusCode::OK);
+        let plain = crypto::open(&cipher, &body).unwrap();
+        let parts: Vec<crate::DownstreamReply> = ["a", "b", "c", "d", "e"]
+            .into_iter()
+            .map(|name| crate::DownstreamReply {
+                name: name.to_string(),
+                status: 200,
+                body: crate::mock_downstream_body(name, 4),
+            })
+            .collect();
+        let expected = crate::process_with_downstream(request, &parts).unwrap();
+        assert_eq!(plain, expected);
+        assert!(!std::str::from_utf8(&plain).unwrap().contains("\"downstream\":null"));
+    }
+
+    #[tokio::test]
+    async fn downstream_5xx_is_bad_gateway() {
+        let (base, _mock) = spawn_mock(Some("c")).await;
+        let urls: Vec<String> = ["a", "b", "c", "d", "e"]
+            .into_iter()
+            .map(|name| format!("{base}/v1/{name}"))
+            .collect();
+        let downstream = crate::downstream::DownstreamClient::new(
+            urls,
+            false,
+            std::time::Duration::from_secs(2),
+        )
+        .unwrap();
+        let app = router_with(&key(), Some(downstream));
+        let cipher = crypto::cipher(&key());
+        let wire = crypto::seal(&cipher, br#"{"id":"hello","data":"hello","multiplier":3}"#).unwrap();
+        let (status, content_type, body) = call(app, wire).await;
+        assert_eq!(status, StatusCode::BAD_GATEWAY);
+        assert_eq!(content_type, "application/json");
+        assert_eq!(body, br#"{"error":"downstream_failed"}"#);
+    }
+
+    #[tokio::test]
+    async fn downstream_timeout_is_bad_gateway() {
+        let (base, _mock) = spawn_mock(Some("slow")).await;
+        let urls: Vec<String> = ["a", "b", "c", "d", "e"]
+            .into_iter()
+            .map(|name| format!("{base}/v1/{name}"))
+            .collect();
+        let downstream = crate::downstream::DownstreamClient::new(
+            urls,
+            true,
+            std::time::Duration::from_millis(150),
+        )
+        .unwrap();
+        let app = router_with(&key(), Some(downstream));
+        let cipher = crypto::cipher(&key());
+        let wire = crypto::seal(&cipher, br#"{"id":"hello","data":"hello","multiplier":3}"#).unwrap();
+        let (status, _, body) = call(app, wire).await;
+        assert_eq!(status, StatusCode::BAD_GATEWAY);
+        assert_eq!(body, br#"{"error":"downstream_failed"}"#);
     }
 }

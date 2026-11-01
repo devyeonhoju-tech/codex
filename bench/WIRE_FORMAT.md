@@ -93,6 +93,24 @@ Compact UTF-8 JSON, no extra whitespace, keys in this order, default JSON string
 
 `checksum`, `length`, and `tag` are JSON numbers, not strings. `id` and `data` are echoed exactly. `length` is the decrypted request size, not the length of `data` alone.
 
+### Downstream fan-out
+
+If `BENCH_DOWNSTREAM_URLS` is unset, the response is exactly the object above. If it is set, it must be five comma-separated HTTP URLs. After the checksum is computed, the service POSTs the decrypted request bytes (`Content-Type: application/json`) to each URL. `BENCH_DOWNSTREAM_MODE=concurrent` (the default) issues the five calls together. `BENCH_DOWNSTREAM_MODE=sequential` waits for each before starting the next. Each call times out after `BENCH_DOWNSTREAM_TIMEOUT_MS` (default 2000). Rust keeps one `reqwest` client with a per-host idle pool. .NET uses `IHttpClientFactory` and a shared `SocketsHttpHandler` pool.
+
+The endpoint name is the last path segment of the URL. Results are stored in that URL order, not completion order. On success the encrypted JSON adds:
+
+```json
+"downstream":[{"name":"a","status":200,"body":"<raw response text>"}, ...]
+```
+
+`body` is the raw response text, not a nested object. A timeout, a connection error, or any non-2xx status on any of the five calls fails the whole request with HTTP 502 and plaintext `{"error":"downstream_failed"}`. Partial aggregates are not returned.
+
+The benchmark never calls the public internet. `crypto-bench mock` is the only downstream. It listens on five `POST /v1/{a,b,c,d,e}` routes, sleeps `delay_ms` plus a uniform `0..=jitter_ms`, and returns:
+
+```json
+{"endpoint":"<name>","pad":"<pad_bytes of x>"}
+```
+
 `bench/testdata/process_vectors.json` holds request JSON, expected response JSON, and the integer fields. Both services must emit those response bytes. The interop client also checks 1 KiB, 64 KiB, and 1 MiB messages by decrypting the response and comparing its full length and bytes.
 
 ## What the load generator does
@@ -112,5 +130,7 @@ Compact UTF-8 JSON, no extra whitespace, keys in this order, default JSON string
 | Repetitions | 3 |
 | Summary | median of the three repetitions |
 | Linux affinity | server on CPUs 0-1, client on CPUs 2-3 |
+
+`bench/run.sh` uses the table above, including the 1 MiB payload and the extra .NET GC variants. `bench/run-fanout.sh` keeps the cipher, the warm-up, the 10 second window, and the three repetitions, and changes the matrix: payloads 1024 and 65536, in-flight concurrency 32, 256, and 1024, and a local five-endpoint mock. Sequential mode and the jitter variant are measured only at 1024 bytes and concurrency 32. The mock is pinned to the same CPUs as the load generator. The 1 MiB payload, the 256 MiB heap cap, and blocking workstation GC are not part of that run.
 
 Rust server threads follow `TOKIO_WORKER_THREADS`, otherwise the process CPU affinity. The .NET process uses `Environment.ProcessorCount` (affinity-aware on Linux), Server GC, and tiered PGO.

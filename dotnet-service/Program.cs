@@ -41,6 +41,42 @@ builder.Services.Configure<SocketTransportOptions>(options => options.NoDelay = 
 
 builder.Services.AddSingleton(new CryptoEngine(key));
 
+string[]? downstreamUrls = null;
+bool downstreamSequential = false;
+TimeSpan downstreamTimeout = TimeSpan.FromMilliseconds(2_000);
+string? downstreamRaw = Environment.GetEnvironmentVariable("BENCH_DOWNSTREAM_URLS");
+if (!string.IsNullOrWhiteSpace(downstreamRaw))
+{
+    downstreamUrls = downstreamRaw.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+    if (downstreamUrls.Length != 5)
+    {
+        Console.Error.WriteLine($"BENCH_DOWNSTREAM_URLS must list exactly 5 endpoints, got {downstreamUrls.Length}.");
+        Environment.ExitCode = 1;
+        return;
+    }
+
+    downstreamSequential = string.Equals(
+        Environment.GetEnvironmentVariable("BENCH_DOWNSTREAM_MODE"),
+        "sequential",
+        StringComparison.OrdinalIgnoreCase);
+    if (int.TryParse(Environment.GetEnvironmentVariable("BENCH_DOWNSTREAM_TIMEOUT_MS"), out int timeoutMs) && timeoutMs > 0)
+    {
+        downstreamTimeout = TimeSpan.FromMilliseconds(timeoutMs);
+    }
+
+    builder.Services.AddHttpClient("downstream", client =>
+    {
+        client.Timeout = Timeout.InfiniteTimeSpan;
+    }).ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler
+    {
+        PooledConnectionLifetime = TimeSpan.FromMinutes(2),
+        PooledConnectionIdleTimeout = TimeSpan.FromSeconds(30),
+        MaxConnectionsPerServer = 2048,
+        ConnectTimeout = TimeSpan.FromSeconds(2),
+        EnableMultipleHttp2Connections = true,
+    });
+}
+
 var app = builder.Build();
 
 app.MapGet("/health", () => Results.Text("ok", "text/plain"));
@@ -58,7 +94,19 @@ app.MapPost("/v1/process", async (HttpRequest request, CryptoEngine crypto, Canc
         return Error(StatusCodes.Status400BadRequest, openError);
     }
 
-    if (!Protocol.TryProcess(plaintext, out byte[] responsePlain, out string processError))
+    List<DownstreamSlot>? downstream = null;
+    if (downstreamUrls is not null)
+    {
+        HttpClient http = request.HttpContext.RequestServices.GetRequiredService<IHttpClientFactory>().CreateClient("downstream");
+        var fanout = new DownstreamFanout(http, downstreamUrls, downstreamSequential, downstreamTimeout);
+        downstream = await fanout.CallAllAsync(plaintext, cancellationToken).ConfigureAwait(false);
+        if (downstream is null)
+        {
+            return Error(StatusCodes.Status502BadGateway, "downstream_failed");
+        }
+    }
+
+    if (!Protocol.TryProcess(plaintext, downstream, out byte[] responsePlain, out string processError))
     {
         return Error(StatusCodes.Status400BadRequest, processError);
     }
@@ -74,7 +122,7 @@ app.Lifetime.ApplicationStarted.Register(() =>
     static string Show(IReadOnlyDictionary<string, object> values, string key) =>
         values.TryGetValue(key, out var value) ? value?.ToString() ?? "" : "unset";
     Console.Error.WriteLine(
-        $"listening {string.Join(",", app.Urls)} processor_count={Environment.ProcessorCount} server_gc={System.Runtime.GCSettings.IsServerGC} concurrent_gc={Show(gc, "ConcurrentGC")} heap_hard_limit={Show(gc, "GCHeapHardLimit")} total_available_bytes={memory.TotalAvailableMemoryBytes} pid={Environment.ProcessId}");
+        $"listening {string.Join(",", app.Urls)} processor_count={Environment.ProcessorCount} server_gc={System.Runtime.GCSettings.IsServerGC} concurrent_gc={Show(gc, "ConcurrentGC")} heap_hard_limit={Show(gc, "GCHeapHardLimit")} total_available_bytes={memory.TotalAvailableMemoryBytes} downstream={(downstreamUrls is null ? "off" : downstreamSequential ? "sequential" : "concurrent")} pid={Environment.ProcessId}");
 });
 
 app.Run();

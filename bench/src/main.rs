@@ -6,6 +6,8 @@
 //! Summing `/proc/<pid>/task/*/stat` drops those threads and can report 0%.
 //! Memory is VmRSS sampled about five times a second.
 
+mod mock;
+
 use std::fs::OpenOptions;
 use std::io::{BufRead, Write};
 use std::path::PathBuf;
@@ -23,7 +25,10 @@ use hyper::Request;
 use hyper_util::rt::TokioIo;
 use aes_gcm::Aes256Gcm;
 use rust_service::crypto::cipher;
-use rust_service::{open, parse_key, process_plaintext, seal};
+use rust_service::{
+    mock_downstream_body, open, parse_key, process_plaintext, process_with_downstream, seal,
+    DownstreamReply,
+};
 use serde::{Deserialize, Serialize};
 use tokio::net::TcpStream;
 use tokio::task::JoinHandle;
@@ -41,6 +46,8 @@ enum Command {
     Load(LoadArgs),
     /// Fold runs.jsonl into markdown and CSV.
     Report(ReportArgs),
+    /// Five local REST endpoints with artificial latency.
+    Mock(mock::MockArgs),
 }
 
 #[derive(Parser)]
@@ -66,6 +73,9 @@ struct LoadArgs {
     duration_secs: u64,
     #[arg(long)]
     output: PathBuf,
+    /// When non-zero, expect the five-call aggregate whose pad length is this.
+    #[arg(long, default_value_t = 0)]
+    downstream_pad_bytes: usize,
 }
 
 #[derive(Parser)]
@@ -118,6 +128,12 @@ fn main() -> anyhow::Result<()> {
     match cli.command {
         Command::Load(args) => load(args),
         Command::Report(args) => report(args),
+        Command::Mock(args) => {
+            let runtime = tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()?;
+            runtime.block_on(mock::serve(args))
+        }
     }
 }
 
@@ -129,9 +145,21 @@ fn load(args: LoadArgs) -> anyhow::Result<()> {
     let aes = Arc::new(cipher(&key));
     let plaintext = request_json(args.payload_bytes);
     let wire = Bytes::from(seal(&aes, &plaintext).map_err(|_| anyhow!("encrypt request failed"))?);
-    let expected = Arc::new(
-        process_plaintext(&plaintext).map_err(|_| anyhow!("build expected response"))?,
-    );
+    let expected_bytes = if args.downstream_pad_bytes == 0 {
+        process_plaintext(&plaintext).map_err(|_| anyhow!("build expected response"))?
+    } else {
+        let parts: Vec<DownstreamReply> = ["a", "b", "c", "d", "e"]
+            .into_iter()
+            .map(|name| DownstreamReply {
+                name: name.to_string(),
+                status: 200,
+                body: mock_downstream_body(name, args.downstream_pad_bytes),
+            })
+            .collect();
+        process_with_downstream(&plaintext, &parts)
+            .map_err(|_| anyhow!("build expected downstream response"))?
+    };
+    let expected = Arc::new(expected_bytes);
     let (host, port, path) = parse_http_url(&args.url)?;
     let host_header = format!("{host}:{port}");
 
@@ -310,7 +338,15 @@ async fn worker(
     while Instant::now() < measure_end {
         let started = Instant::now();
         let in_window = started >= warmup_end;
-        let result = send_one(&mut live, &host_header, &path, (*body).clone()).await;
+        let result = match tokio::time::timeout(
+            Duration::from_secs(20),
+            send_one(&mut live, &host_header, &path, (*body).clone()),
+        )
+        .await
+        {
+            Ok(inner) => inner,
+            Err(_) => Err(anyhow!("client timeout")),
+        };
         let finished = Instant::now();
         match result {
             Ok(bytes) => {
@@ -529,33 +565,38 @@ fn report(args: ReportArgs) -> anyhow::Result<()> {
         anyhow::bail!("no runs in {}", args.input.display());
     }
 
-    let mut groups: Vec<(String, u64)> = Vec::new();
+    let mut groups: Vec<(String, u64, u32)> = Vec::new();
     for run in &runs {
-        let key = (run.service.clone(), run.payload_bytes);
+        let key = (run.service.clone(), run.payload_bytes, run.concurrency);
         if !groups.contains(&key) {
             groups.push(key);
         }
     }
     groups.sort_by(|a, b| {
-        a.1.cmp(&b.1)
+        a.2.cmp(&b.2)
+            .then_with(|| a.1.cmp(&b.1))
             .then_with(|| variant_order(&a.0).cmp(&variant_order(&b.0)))
             .then_with(|| a.0.cmp(&b.0))
     });
 
     let mut notes = Vec::new();
     let mut summary = String::new();
-    summary.push_str("| Service | Payload | HTTP body | RPS | p50 ms | p95 ms | p99 ms | CPU (1 core = 100%) | RSS avg MiB | RSS peak MiB |\n");
-    summary.push_str("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n");
+    summary.push_str("| Service | Concurrency | Payload | HTTP body | RPS | p50 ms | p95 ms | p99 ms | CPU (1 core = 100%) | RSS avg MiB | RSS peak MiB |\n");
+    summary.push_str("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n");
 
-    for (service, payload) in &groups {
+    for (service, payload, concurrency) in &groups {
         let mut subset: Vec<&RunRecord> = runs
             .iter()
-            .filter(|run| run.service == *service && run.payload_bytes == *payload)
+            .filter(|run| {
+                run.service == *service
+                    && run.payload_bytes == *payload
+                    && run.concurrency == *concurrency
+            })
             .collect();
         subset.sort_by_key(|run| run.repetition);
         let median = median_run(&subset);
         summary.push_str(&format!(
-            "| {service} | {payload} | {} | {:.1} | {:.3} | {:.3} | {:.3} | {} | {} | {} |\n",
+            "| {service} | {concurrency} | {payload} | {} | {:.1} | {:.3} | {:.3} | {:.3} | {} | {} | {} |\n",
             median.http_body_bytes,
             median.rps,
             median.p50_ms,
@@ -581,8 +622,8 @@ fn report(args: ReportArgs) -> anyhow::Result<()> {
     }
 
     let mut details = String::new();
-    details.push_str("| Service | Payload | Rep | Requests | Errors | RPS | p50 ms | p95 ms | p99 ms | Server CPU | Client CPU | RSS avg | RSS peak | Affinity | Verified |\n");
-    details.push_str("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- |\n");
+    details.push_str("| Service | Concurrency | Payload | Rep | Requests | Errors | RPS | p50 ms | p95 ms | p99 ms | Server CPU | Client CPU | RSS avg | RSS peak | Affinity | Verified |\n");
+    details.push_str("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- |\n");
     let mut ordered = runs.clone();
     ordered.sort_by(|a, b| {
         a.payload_bytes
@@ -590,11 +631,21 @@ fn report(args: ReportArgs) -> anyhow::Result<()> {
             .then_with(|| variant_order(&a.service).cmp(&variant_order(&b.service)))
             .then_with(|| a.service.cmp(&b.service))
             .then_with(|| a.repetition.cmp(&b.repetition))
+            .then_with(|| a.concurrency.cmp(&b.concurrency))
     });
-    for run in &ordered {
+    let mut detail_ordered = ordered.clone();
+    detail_ordered.sort_by(|a, b| {
+        a.concurrency
+            .cmp(&b.concurrency)
+            .then_with(|| a.payload_bytes.cmp(&b.payload_bytes))
+            .then_with(|| a.service.cmp(&b.service))
+            .then_with(|| a.repetition.cmp(&b.repetition))
+    });
+    for run in &detail_ordered {
         details.push_str(&format!(
-            "| {} | {} | {} | {} | {} | {:.1} | {:.3} | {:.3} | {:.3} | {} | {} | {} | {} | {} | {} |\n",
+            "| {} | {} | {} | {} | {} | {} | {:.1} | {:.3} | {:.3} | {:.3} | {} | {} | {} | {} | {} | {} |\n",
             run.service,
+            run.concurrency,
             run.payload_bytes,
             run.repetition,
             run.requests,
@@ -611,6 +662,14 @@ fn report(args: ReportArgs) -> anyhow::Result<()> {
             format!("{} ({})", run.verified, run.verified_samples)
         ));
     }
+    let mut concurrencies: Vec<u32> = runs.iter().map(|run| run.concurrency).collect();
+    concurrencies.sort_unstable();
+    concurrencies.dedup();
+    let concurrency_text = concurrencies
+        .iter()
+        .map(|value| value.to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
 
     let env = match &args.env_file {
         Some(path) => {
@@ -631,9 +690,9 @@ fn report(args: ReportArgs) -> anyhow::Result<()> {
     let markdown = format!(
         r#"# Benchmark results
 
-These numbers were measured by `bench/run.sh` on this machine. They are not a general ranking of Rust and C#. Absolute throughput will move on other hardware, and a shared cloud VM is noisy.
+These numbers were measured on this machine by `bench/run.sh` or `bench/run-fanout.sh`. They are not a general ranking of Rust and C#. Absolute throughput will move on other hardware, and a shared cloud VM is noisy.
 
-Summary values are the **median of {reps} repetitions**. Each repetition is a closed-loop HTTP/1.1 run: {concurrency} in-flight requests, {warmup}s warm-up (discarded), {duration}s measured. Payload is the UTF-8 length of the JSON `data` field. CPU is server user+system time from `/proc/<pid>/stat` over the measured window, where 100% means one fully busy core. RSS is the server's resident set during that window.
+Summary values are the **median of {reps} repetitions**. Each repetition is a closed-loop HTTP/1.1 run with {concurrency_text} in-flight requests, {warmup}s warm-up (discarded), {duration}s measured. Payload is the UTF-8 length of the JSON `data` field. CPU is server user+system time from `/proc/<pid>/stat` over the measured window, where 100% means one fully busy core. RSS is the server's resident set during that window.
 
 ## Summary
 
@@ -649,8 +708,9 @@ Summary values are the **median of {reps} repetitions**. Each repetition is a cl
 
 - Load generator: `crypto-bench` (this repo), Hyper HTTP/1.1 keep-alive, one connection per in-flight request, TCP_NODELAY, HDR histogram of client latency.
 - The request body is encrypted once and repeated. That reuses a GCM nonce, which is not safe in production; it keeps the bytes identical. Services still pick a new nonce for every response. During the measured window every 32nd success is decrypted and compared, in full, to the expected plaintext (length and bytes). A run with zero full matches fails.
-- Linux affinity during `run.sh`: server on CPUs 0-1, load generator on CPUs 2-3. They still share memory bandwidth, last-level cache, and the hypervisor.
-- No TLS. The work is HTTP framing, AES-256-GCM, JSON, and the FNV-1a step.
+- Linux affinity: server on CPUs 0-1, load generator on CPUs 2-3. They still share memory bandwidth, last-level cache, and the hypervisor.
+- `bench/run-fanout.sh` uses that same pinning, warm-up, duration, and repetition count. It also runs `crypto-bench mock` on the client CPUs, so the mock and the load generator share two cores. Service names look like `rust-conc-20` or `dotnet-aot-base`. `base` is no downstream. `conc-20` and `conc-100` are five concurrent calls with a fixed 20 ms or 100 ms mock delay. `seq-20` and `seq-100` are the same calls issued one after another, measured only at 1 KiB and concurrency 32. `jitter-20` is concurrent with 20 ms plus a uniform 0..=30 ms, also only at 1 KiB and concurrency 32. Downstream pad is 128 bytes of `x`. A timeout or any non-2xx on one of the five calls is HTTP 502 and is counted as an error. The capped-heap and blocking-workstation variants are not in that matrix, and neither is the 1 MiB payload. Absolute rates are indicative because the mock shares the VM.
+- No TLS. The work is HTTP framing, AES-256-GCM, JSON, the FNV-1a step, and, in the fan-out rows, five loopback REST calls.
 - Rust: release profile, thin LTO, codegen-units = 1, axum/tokio, RustCrypto `aes-gcm` with runtime AES-NI detection. Not `target-cpu=native`.
 - .NET 10 baseline (`dotnet-server-gc`): `dotnet publish -c Release`, framework-dependent, ReadyToRun, Server GC, background GC, tiered PGO, invariant globalization.
 - `dotnet-workstation`: same binary, `DOTNET_gcServer=0` (background GC stays on).
@@ -666,12 +726,12 @@ Summary values are the **median of {reps} repetitions**. Each repetition is a cl
 
 ## Limits
 
-A 4-vCPU guest cannot say which language is faster in production. Use this as a same-machine comparison of these two programs, and rerun `bench/run.sh` or `bench/run.ps1` where the result matters.
+A 4-vCPU guest cannot say which language is faster in production. Use this as a same-machine comparison of these two programs, and rerun `bench/run.sh` or `bench/run-fanout.sh` where the result matters.
 "#,
         reps = head
             .repetition
             .max(ordered.iter().map(|run| run.repetition).max().unwrap_or(1)),
-        concurrency = head.concurrency,
+        concurrency_text = concurrency_text,
         warmup = head.warmup_secs,
         duration = head.duration_secs,
         summary = summary,
