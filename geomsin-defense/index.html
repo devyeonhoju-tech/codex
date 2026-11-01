@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, minimum-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+  <meta name="theme-color" content="#1a1014" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <title>전생검신</title>
+  <meta name="description" content="전생검신. 검을 소환하고, 셋을 겹쳐 합체하고, 검로를 막는 랜덤 디펜스." />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect fill='%231a1014' width='32' height='32'/%3E%3Cpath fill='%23e6c27a' d='M15 3h2l1 16h-4z'/%3E%3Cpath fill='%23c4473a' d='M10 19h12v3H10z'/%3E%3Cpath fill='%23f4ead8' d='M14.2 22h3.6V28h-3.6z'/%3E%3C/svg%3E" />
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+  <div id="app">
+    <header id="hud">
+      <div class="stat"><span>파도</span><strong id="hud-wave">—</strong></div>
+      <div class="stat"><span>금화</span><strong id="hud-gold">0</strong></div>
+      <div class="stat"><span>목숨</span><strong id="hud-lives">20</strong></div>
+      <div class="stat"><span>시간</span><strong id="hud-time">00:00</strong></div>
+      <button id="btn-mute" type="button" aria-pressed="false">소리</button>
+    </header>
+    <p id="preview" class="preview">전생의 검객을 불러, 검로를 막는다.</p>
+    <div id="stage">
+      <canvas id="view" aria-hidden="true"></canvas>
+    </div>
+    <p id="inspect" class="inspect"></p>
+    <div id="dock">
+      <div id="controls">
+        <button id="btn-summon" type="button"><b id="lbl-summon">소환</b><small id="cost-summon">50</small></button>
+        <button id="btn-reroll" type="button"><b>재굴림</b><small id="cost-reroll">18</small></button>
+        <button id="btn-upgrade" type="button"><b id="lbl-upgrade">각성 1</b><small id="cost-upgrade">130</small></button>
+        <button id="btn-recipe" type="button"><b>비급</b><small id="cost-recipe">조합</small></button>
+        <button id="btn-sell" type="button"><b>방출</b><small id="cost-sell">—</small></button>
+        <button id="btn-call" type="button"><b id="lbl-call">출진</b><small id="cost-call">—</small></button>
+      </div>
+    </div>
+    <p id="status" class="status"></p>
+  </div>
+
+  <section id="title" class="overlay">
+    <div class="panel">
+      <p class="eyebrow">회검각</p>
+      <h1>전생검신</h1>
+      <p class="lede">검과 함께 스러진 이가 회검각에서 눈을 뜬다. 전생의 검객을 불러 세우고, 같은 검 셋을 겹쳐 더 깊은 기억을 깨워라.</p>
+      <button id="btn-start" class="primary" type="button">검을 들다</button>
+      <ul class="rules">
+        <li>금화로 검을 소환하고, 빈 칸을 눌러 배치한다.</li>
+        <li>같은 검이 셋이면 다음 등급으로 합체된다.</li>
+        <li>비급은 서로 다른 검을 바쳐 숨은 검을 만든다.</li>
+        <li>적이 문까지 가면 목숨이 줄고, 마지막 파도를 막으면 이긴다.</li>
+      </ul>
+      <p id="title-best" class="best">아직 기록이 없다.</p>
+      <p class="keys">키보드: Space 소환 · R 재굴림 · U 각성 · B 비급 · X 방출 · Enter 출진 · M 소리</p>
+    </div>
+  </section>
+
+  <section id="recipe" class="overlay" hidden>
+    <div class="panel">
+      <p class="eyebrow">숨은 검</p>
+      <h2>비급</h2>
+      <p class="lede">셋이 겹치는 합체와 달리, 적힌 검을 제물로 바친다. 더 높은 등급이 있으면 낮은 쪽을 먼저 쓴다. 보는 동안 시간은 멈춘다.</p>
+      <div id="recipe-list"></div>
+      <button id="recipe-close" class="ghost" type="button">닫기</button>
+    </div>
+  </section>
+
+  <section id="gameover" class="overlay" hidden>
+    <div class="panel">
+      <p id="over-kicker" class="eyebrow">회검각</p>
+      <h2 id="over-title">검이 꺾였다</h2>
+      <p id="over-flavor" class="flavor"></p>
+      <dl class="stats">
+        <div><dt>파도</dt><dd id="stat-wave">0</dd></div>
+        <div><dt>처치</dt><dd id="stat-kills">0</dd></div>
+        <div><dt>합체</dt><dd id="stat-merges">0</dd></div>
+        <div><dt>누수</dt><dd id="stat-leaks">0</dd></div>
+        <div><dt>시간</dt><dd id="stat-time">00:00</dd></div>
+        <div><dt>획득 금화</dt><dd id="stat-gold">0</dd></div>
+      </dl>
+      <p id="over-best" class="best"></p>
+      <button id="btn-restart" class="primary" type="button">다시 들다</button>
+    </div>
+  </section>
+
+  <div id="live" class="sr-only" aria-live="polite"></div>
+  <noscript>이 게임은 자바스크립트가 필요하다.</noscript>
+  <script src="js/balance.js"></script>
+  <script src="js/audio.js"></script>
+  <script src="js/game.js"></script>
+  <script src="js/render.js"></script>
+  <script src="js/main.js"></script>
+</body>
+</html>
