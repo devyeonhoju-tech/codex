@@ -1,12 +1,19 @@
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
-use tiberius::{AuthMethod, Client, Config, IntoRow, Query};
+use tiberius::{AuthMethod, Client, Config, Query};
 use tokio::net::TcpStream;
 use tokio_util::compat::{Compat, TokioAsyncWriteCompatExt};
 
 use crate::event::IngestEvent;
-use crate::writer::Pending;
+
+pub struct NewRow<'a> {
+    pub vantr: &'a str,
+    pub source_id: &'a str,
+    pub timestamp: DateTime<Utc>,
+    pub payload: &'a str,
+    pub received_at: DateTime<Utc>,
+}
 
 pub type SqlConn = Client<Compat<TcpStream>>;
 
@@ -177,7 +184,7 @@ pub async fn count_rows(settings: &Settings) -> Result<(i64, i64), String> {
     let mut client = connect(settings, &settings.database).await.map_err(|err| err.to_string())?;
     let stream = client
         .simple_query(
-            "SELECT COUNT_BIG(*) AS row_count, COUNT_BIG(DISTINCT id) AS distinct_ids FROM dbo.ingest_events",
+            "SELECT COUNT_BIG(*) AS row_count, COUNT_BIG(DISTINCT vantr) AS distinct_ids FROM dbo.ingest_events",
         )
         .await
         .map_err(|err| err.to_string())?;
@@ -234,29 +241,78 @@ pub async fn info(settings: &Settings) -> Result<String, String> {
     ))
 }
 
-pub async fn bulk_insert(client: &mut SqlConn, rows: &[Pending]) -> Result<(), tiberius::error::Error> {
-    let columns = [
-        "id",
-        "source_id",
-        "event_timestamp",
-        "payload",
-        "received_at",
-    ];
-    let mut request = client
-        .bulk_insert_columns("dbo.ingest_events", &columns)
-        .await?;
-    for row in rows {
-        let token = (
-            row.event.id,
-            row.event.source_id.as_str(),
-            row.event.timestamp,
-            row.event.payload.as_str(),
-            row.received_at,
-        )
-            .into_row();
-        request.send(token).await?;
+#[derive(Debug)]
+pub struct InsertError {
+    pub fatal: bool,
+    pub duplicate: bool,
+    pub message: String,
+}
+
+fn classify(err: tiberius::error::Error) -> InsertError {
+    let duplicate = is_duplicate(&err);
+    let fatal = !duplicate
+        && matches!(
+            &err,
+            tiberius::error::Error::Io { .. } | tiberius::error::Error::Tls(_)
+        );
+    InsertError {
+        fatal,
+        duplicate,
+        message: err.to_string(),
     }
-    request.finalize().await?;
+}
+
+async fn run_batch_sql(client: &mut SqlConn, sql: &str) -> Result<(), InsertError> {
+    let stream = client.simple_query(sql).await.map_err(classify)?;
+    stream.into_results().await.map_err(classify)?;
+    Ok(())
+}
+
+pub async fn insert_many(client: &mut SqlConn, rows: &[NewRow<'_>]) -> Result<(), InsertError> {
+    if rows.is_empty() {
+        return Ok(());
+    }
+    run_batch_sql(client, "BEGIN TRAN").await?;
+    let inserted = insert_many_values(client, rows).await;
+    match inserted {
+        Ok(()) => run_batch_sql(client, "COMMIT").await,
+        Err(err) => {
+            let _ = run_batch_sql(client, "ROLLBACK").await;
+            Err(err)
+        }
+    }
+}
+
+async fn insert_many_values(client: &mut SqlConn, rows: &[NewRow<'_>]) -> Result<(), InsertError> {
+    let mut values = String::new();
+    for index in 0..rows.len() {
+        if index > 0 {
+            values.push_str(", ");
+        }
+        let base = index * 5 + 1;
+        values.push_str(&format!(
+            "(@P{base}, @P{}, @P{}, @P{}, @P{})",
+            base + 1,
+            base + 2,
+            base + 3,
+            base + 4
+        ));
+    }
+    let sql = format!(
+        "INSERT INTO dbo.ingest_events (vantr, source_id, event_timestamp, payload, received_at) \
+         SELECT v.vantr, v.source_id, v.event_timestamp, v.payload, v.received_at \
+         FROM (VALUES {values}) AS v(vantr, source_id, event_timestamp, payload, received_at) \
+         WHERE NOT EXISTS (SELECT 1 FROM dbo.ingest_events AS t WHERE t.vantr = v.vantr)"
+    );
+    let mut query = Query::new(sql);
+    for row in rows {
+        query.bind(row.vantr);
+        query.bind(row.source_id);
+        query.bind(row.timestamp);
+        query.bind(row.payload);
+        query.bind(row.received_at);
+    }
+    query.execute(client).await.map_err(classify)?;
     Ok(())
 }
 
@@ -266,16 +322,30 @@ pub async fn insert_one(
     received_at: DateTime<Utc>,
 ) -> Result<(), tiberius::error::Error> {
     let mut query = Query::new(
-        "INSERT INTO dbo.ingest_events (id, source_id, event_timestamp, payload, received_at) \
-         VALUES (@P1, @P2, @P3, @P4, @P5)",
+        "INSERT INTO dbo.ingest_events (vantr, source_id, event_timestamp, payload, received_at) \
+         SELECT @P1, @P2, @P3, @P4, @P5 \
+         WHERE NOT EXISTS (SELECT 1 FROM dbo.ingest_events WHERE vantr = @P1)",
     );
-    query.bind(event.id);
+    query.bind(event.vantr.as_str());
     query.bind(event.source_id.as_str());
     query.bind(event.timestamp);
     query.bind(event.payload.as_str());
     query.bind(received_at);
     query.execute(client).await?;
     Ok(())
+}
+
+pub async fn vantr_exists(client: &mut SqlConn, vantr: &str) -> Result<bool, InsertError> {
+    let mut query = Query::new("SELECT 1 FROM dbo.ingest_events WHERE vantr = @P1");
+    query.bind(vantr);
+    let row = query
+        .query(client)
+        .await
+        .map_err(classify)?
+        .into_row()
+        .await
+        .map_err(classify)?;
+    Ok(row.is_some())
 }
 
 pub fn is_duplicate(err: &tiberius::error::Error) -> bool {

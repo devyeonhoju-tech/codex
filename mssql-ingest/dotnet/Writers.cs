@@ -150,31 +150,46 @@ public sealed class BatchIngestWriter : BackgroundService
 
     private async Task FlushOneAsync(List<PendingEvent> batch)
     {
+        var groups = batch
+            .GroupBy(pending => pending.Event.Vantr ?? "", StringComparer.Ordinal)
+            .ToList();
+        var distinct = groups.Select(group => group.First()).ToList();
+        WriteResult[] results;
         try
         {
-            await _flush(batch, CancellationToken.None).ConfigureAwait(false);
-            _counters.Batch();
-            _counters.Committed(batch.Count);
-            Complete(batch, WriteResult.Committed);
-        }
-        catch (SqlException ex) when (ex.Number is 2627 or 2601)
-        {
-            _counters.Duplicates(batch.Count);
-            Complete(batch, WriteResult.Duplicate);
+            results = await BatchIsolator.IsolateAsync(
+                distinct.Count,
+                (start, count, cancellationToken) => _flush(distinct.GetRange(start, count), cancellationToken),
+                async (index, cancellationToken) =>
+                    await SqlBulkFlush.ExistsAsync(_options, distinct[index].Event.Vantr!, cancellationToken)
+                        .ConfigureAwait(false),
+                SqlBulkFlush.IsFatal,
+                CancellationToken.None).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
-            Console.Error.WriteLine($"batch flush failed rows={batch.Count} error={ex.GetType().Name} message={ex.Message}");
-            _counters.Failed(batch.Count);
-            Complete(batch, WriteResult.Failed);
+            Console.Error.WriteLine($"batch isolate failed rows={batch.Count} error={ex.GetType().Name} message={ex.Message}");
+            results = Enumerable.Repeat(WriteResult.Failed, distinct.Count).ToArray();
         }
-    }
 
-    private static void Complete(List<PendingEvent> batch, WriteResult result)
-    {
-        foreach (var pending in batch)
+        _counters.Batch();
+        for (var i = 0; i < groups.Count; i++)
         {
-            pending.Completion.TrySetResult(result);
+            var result = results[i];
+            var waiters = groups[i].Count();
+            if (result is WriteResult.Committed or WriteResult.Duplicate)
+            {
+                _counters.Committed(waiters);
+            }
+            else
+            {
+                _counters.Failed(waiters);
+            }
+
+            foreach (var pending in groups[i])
+            {
+                pending.Completion.TrySetResult(result);
+            }
         }
     }
 }
@@ -186,8 +201,13 @@ public static class SqlBulkFlush
         IReadOnlyList<PendingEvent> batch,
         CancellationToken cancellationToken)
     {
+        if (batch.Count == 0)
+        {
+            return;
+        }
+
         var table = new DataTable();
-        table.Columns.Add("id", typeof(Guid));
+        table.Columns.Add("vantr", typeof(string));
         table.Columns.Add("source_id", typeof(string));
         table.Columns.Add("event_timestamp", typeof(DateTime));
         table.Columns.Add("payload", typeof(string));
@@ -195,7 +215,7 @@ public static class SqlBulkFlush
         foreach (var pending in batch)
         {
             table.Rows.Add(
-                pending.Event.Id,
+                pending.Event.Vantr,
                 pending.Event.SourceId,
                 UnspecifiedUtc(pending.Event.Timestamp.UtcDateTime),
                 pending.Event.Payload,
@@ -204,19 +224,81 @@ public static class SqlBulkFlush
 
         await using var connection = new SqlConnection(options.ConnectionString(options.Database));
         await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
-        using var bulk = new SqlBulkCopy(connection, SqlBulkCopyOptions.UseInternalTransaction, null)
+        await using var transaction = (SqlTransaction)await connection.BeginTransactionAsync(cancellationToken)
+            .ConfigureAwait(false);
+        await using (var create = new SqlCommand(
+            """
+            CREATE TABLE #ingest_stage (
+                vantr NVARCHAR(128) NOT NULL,
+                source_id NVARCHAR(128) NOT NULL,
+                event_timestamp DATETIME2(3) NOT NULL,
+                payload NVARCHAR(1024) NOT NULL,
+                received_at DATETIME2(3) NOT NULL
+            );
+            """,
+            connection,
+            transaction))
         {
-            DestinationTableName = "dbo.ingest_events",
+            await create.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        using (var bulk = new SqlBulkCopy(connection, SqlBulkCopyOptions.Default, transaction)
+        {
+            DestinationTableName = "#ingest_stage",
             BatchSize = batch.Count,
             BulkCopyTimeout = 30,
-        };
-        bulk.ColumnMappings.Add("id", "id");
-        bulk.ColumnMappings.Add("source_id", "source_id");
-        bulk.ColumnMappings.Add("event_timestamp", "event_timestamp");
-        bulk.ColumnMappings.Add("payload", "payload");
-        bulk.ColumnMappings.Add("received_at", "received_at");
-        await bulk.WriteToServerAsync(table, cancellationToken).ConfigureAwait(false);
+        })
+        {
+            bulk.ColumnMappings.Add("vantr", "vantr");
+            bulk.ColumnMappings.Add("source_id", "source_id");
+            bulk.ColumnMappings.Add("event_timestamp", "event_timestamp");
+            bulk.ColumnMappings.Add("payload", "payload");
+            bulk.ColumnMappings.Add("received_at", "received_at");
+            await bulk.WriteToServerAsync(table, cancellationToken).ConfigureAwait(false);
+        }
+
+        await using (var insert = new SqlCommand(
+            """
+            INSERT INTO dbo.ingest_events (vantr, source_id, event_timestamp, payload, received_at)
+            SELECT s.vantr, s.source_id, s.event_timestamp, s.payload, s.received_at
+            FROM #ingest_stage AS s
+            WHERE NOT EXISTS (
+                SELECT 1 FROM dbo.ingest_events AS t WHERE t.vantr = s.vantr
+            );
+            """,
+            connection,
+            transaction)
+        {
+            CommandTimeout = 30,
+        })
+        {
+            await insert.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
     }
+
+    public static async Task<bool> ExistsAsync(
+        IngestOptions options,
+        string vantr,
+        CancellationToken cancellationToken)
+    {
+        await using var connection = new SqlConnection(options.ConnectionString(options.Database));
+        await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
+        await using var command = new SqlCommand(
+            "SELECT 1 FROM dbo.ingest_events WHERE vantr = @vantr",
+            connection)
+        {
+            CommandTimeout = 5,
+        };
+        command.Parameters.Add("@vantr", SqlDbType.NVarChar, IngestOptions.MaxVantrUnits).Value = vantr;
+        var found = await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
+        return found is not null;
+    }
+
+    public static bool IsFatal(Exception exception) =>
+        exception is SqlException sql && sql.Number is -2 or 53 or 233 or 10053 or 10054 or 10060
+        || exception is TimeoutException;
 
     private static DateTime UnspecifiedUtc(DateTime value) =>
         DateTime.SpecifyKind(value, DateTimeKind.Unspecified);
@@ -254,14 +336,15 @@ public sealed class SingleIngestWriter
             await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
             await using var command = new SqlCommand(
                 """
-                INSERT INTO dbo.ingest_events (id, source_id, event_timestamp, payload, received_at)
-                VALUES (@id, @source_id, @event_timestamp, @payload, @received_at)
+                INSERT INTO dbo.ingest_events (vantr, source_id, event_timestamp, payload, received_at)
+                SELECT @vantr, @source_id, @event_timestamp, @payload, @received_at
+                WHERE NOT EXISTS (SELECT 1 FROM dbo.ingest_events WHERE vantr = @vantr);
                 """,
                 connection)
             {
                 CommandTimeout = 10,
             };
-            command.Parameters.Add("@id", SqlDbType.UniqueIdentifier).Value = ev.Id;
+            command.Parameters.Add("@vantr", SqlDbType.NVarChar, IngestOptions.MaxVantrUnits).Value = ev.Vantr;
             command.Parameters.Add("@source_id", SqlDbType.NVarChar, IngestOptions.MaxSourceUnits).Value = ev.SourceId;
             command.Parameters.Add("@event_timestamp", SqlDbType.DateTime2).Value =
                 DateTime.SpecifyKind(ev.Timestamp.UtcDateTime, DateTimeKind.Unspecified);
@@ -275,7 +358,8 @@ public sealed class SingleIngestWriter
         catch (SqlException ex) when (ex.Number is 2627 or 2601)
         {
             _counters.Duplicates(1);
-            return WriteResult.Duplicate;
+            _counters.Committed(1);
+            return WriteResult.Committed;
         }
         catch (Exception ex)
         {

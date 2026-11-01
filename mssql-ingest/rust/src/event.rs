@@ -1,13 +1,14 @@
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
-use uuid::Uuid;
 
 pub const MAX_PAYLOAD_UNITS: usize = 1024;
 pub const MAX_SOURCE_UNITS: usize = 128;
+/// Assumption until the VAN publishes the real maximum for `vantr`.
+pub const MAX_VANTR_UNITS: usize = 128;
 
 #[derive(Debug, Clone)]
 pub struct IngestEvent {
-    pub id: Uuid,
+    pub vantr: String,
     pub source_id: String,
     pub timestamp: DateTime<Utc>,
     pub payload: String,
@@ -15,7 +16,7 @@ pub struct IngestEvent {
 
 #[derive(Debug, Deserialize)]
 struct RawEvent {
-    id: Option<Uuid>,
+    vantr: Option<String>,
     #[serde(rename = "sourceId")]
     source_id: Option<String>,
     timestamp: Option<DateTime<Utc>>,
@@ -24,9 +25,10 @@ struct RawEvent {
 
 pub fn parse_event(bytes: &[u8]) -> Result<IngestEvent, &'static str> {
     let raw: RawEvent = serde_json::from_slice(bytes).map_err(|_| "invalid_json")?;
-    let id = raw.id.ok_or("invalid_id")?;
-    if id.is_nil() {
-        return Err("invalid_id");
+    let vantr = raw.vantr.ok_or("invalid_vantr")?;
+    let vantr = vantr.trim().to_string();
+    if vantr.is_empty() || utf16_len(&vantr) > MAX_VANTR_UNITS || vantr.contains('\0') {
+        return Err("invalid_vantr");
     }
     let source = raw.source_id.ok_or("invalid_source")?;
     let source = source.trim().to_string();
@@ -42,7 +44,7 @@ pub fn parse_event(bytes: &[u8]) -> Result<IngestEvent, &'static str> {
         return Err("payload_too_large");
     }
     Ok(IngestEvent {
-        id,
+        vantr,
         source_id: source,
         timestamp,
         payload,
@@ -59,7 +61,7 @@ mod tests {
 
     fn body(payload: &str) -> String {
         format!(
-            r#"{{"id":"3fa85f64-5717-4562-b3fc-2c963f66afa6","sourceId":"device-1","timestamp":"2026-11-01T15:34:00Z","payload":"{payload}"}}"#
+            r#"{{"vantr":"VAN202611010001","sourceId":"device-1","timestamp":"2026-11-01T15:34:00Z","payload":"{payload}"}}"#
         )
     }
 
@@ -78,9 +80,9 @@ mod tests {
     }
 
     #[test]
-    fn rejects_an_empty_guid() {
-        let raw = br#"{"id":"00000000-0000-0000-0000-000000000000","sourceId":"device-1","timestamp":"2026-11-01T15:34:00Z","payload":"x"}"#;
-        assert_eq!(parse_event(raw).unwrap_err(), "invalid_id");
+    fn rejects_an_empty_vantr() {
+        let raw = br#"{"vantr":"  ","sourceId":"device-1","timestamp":"2026-11-01T15:34:00Z","payload":"x"}"#;
+        assert_eq!(parse_event(raw).unwrap_err(), "invalid_vantr");
     }
 
     #[test]

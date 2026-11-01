@@ -37,7 +37,7 @@ public static class Schema
         await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
         await using var command = new SqlCommand(
             """
-            SELECT COUNT_BIG(*) AS row_count, COUNT_BIG(DISTINCT id) AS distinct_ids
+            SELECT COUNT_BIG(*) AS row_count, COUNT_BIG(DISTINCT vantr) AS distinct_ids
             FROM dbo.ingest_events
             """,
             connection)
