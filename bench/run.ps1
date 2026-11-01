@@ -131,7 +131,7 @@ Clear-GcEnv
 $aotLog = "$Root\bench\results\aot-publish.txt"
 $aotOk = $false
 try {
-  dotnet publish "$Root\dotnet-service\CryptoBench.csproj" -c Release -o "$Root\dotnet-service\publish-aot" -p:PublishAot=true --nologo *> $aotLog
+  dotnet publish "$Root\dotnet-service\CryptoBench.csproj" -c Release -o "$Root\dotnet-service\publish-aot" -p:PublishAot=true -p:PublishReadyToRun=false --nologo *> $aotLog
   if ($LASTEXITCODE -eq 0) { $aotOk = $true }
 } catch {
   $_ | Out-File -FilePath $aotLog

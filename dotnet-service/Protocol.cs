@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace CryptoBench;
 
@@ -14,6 +15,10 @@ public static class Protocol
     public const int MaxDataBytes = 2_000_000;
     public const int MaxBody = 8 * 1024 * 1024;
 
+    /// <summary>
+    /// Options for tests and any non-trimmed caller. The hot path uses
+    /// <see cref="Context"/>, which carries the same naming and escaping.
+    /// </summary>
     public static readonly JsonSerializerOptions Json = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
@@ -21,6 +26,12 @@ public static class Protocol
         Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
         WriteIndented = false,
     };
+
+    /// <summary>
+    /// Source-generated contract for Native AOT. A copy of <see cref="Json"/> is
+    /// passed in so the context can own its resolver without mutating <see cref="Json"/>.
+    /// </summary>
+    public static readonly ProtocolJsonContext Context = new(new JsonSerializerOptions(Json));
 
     public static uint Fnv1a32(ReadOnlySpan<byte> data)
     {
@@ -42,7 +53,7 @@ public static class Protocol
         ProcessRequest? request;
         try
         {
-            request = JsonSerializer.Deserialize<ProcessRequest>(plaintext, Json);
+            request = JsonSerializer.Deserialize(plaintext, Context.ProcessRequest);
         }
         catch (JsonException)
         {
@@ -76,7 +87,7 @@ public static class Protocol
         uint tag = checksum ^ request.Multiplier.Value ^ length;
         response = JsonSerializer.SerializeToUtf8Bytes(
             new ProcessResponse(request.Id, checksum, length, tag),
-            Json);
+            Context.ProcessResponse);
         error = "";
         return true;
     }
@@ -90,3 +101,11 @@ public sealed class ProcessRequest
 }
 
 public sealed record ProcessResponse(string Id, uint Checksum, uint Length, uint Tag);
+
+[JsonSourceGenerationOptions(
+    PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase,
+    PropertyNameCaseInsensitive = false,
+    WriteIndented = false)]
+[JsonSerializable(typeof(ProcessRequest))]
+[JsonSerializable(typeof(ProcessResponse))]
+public partial class ProtocolJsonContext : JsonSerializerContext;

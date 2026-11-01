@@ -38,8 +38,9 @@ Nothing here is part of a game or a GitHub Pages site. The servers bind to loopb
 | `dotnet-workstation` | Same binary, `DOTNET_gcServer=0`. Background GC stays on |
 | `dotnet-workstation-blocking` | Second publish with server GC and concurrent GC both off. `DOTNET_gcConcurrent=0` does not override `System.GC.Concurrent` after it is written into `runtimeconfig.json` |
 | `dotnet-heap-limit` | Baseline plus `DOTNET_GCHeapHardLimit=8000000` (128 MiB, hex). 64 MiB returned HTTP 500 on the 1 MiB payload at 32 in-flight requests |
+| `dotnet-aot` | Native AOT publish of the same program, Server GC and background GC. ReadyToRun is off for that publish only |
 
-Native AOT is attempted with `PublishAot=true` on every run. This service calls `JsonSerializer.Deserialize` and `SerializeToUtf8Bytes` with `JsonSerializerOptions`, which the trimmer rejects (`IL2026`, `IL3050`). The compiler output is `bench/results/aot-publish.txt`. The JSON calls were left as they are. Invariant globalization is on because this service never formats cultures.
+Request and response JSON go through `ProtocolJsonContext` (source generation, same camelCase and relaxed escaping as before). The JIT publishes use that context too, so those rows are measured with it, not with the older reflection calls. Invariant globalization is on because this service never formats cultures.
 
 The Linux script pins the server to CPUs 0-1 and the load generator to CPUs 2-3. They still share memory bandwidth, cache, and the hypervisor.
 
@@ -96,7 +97,7 @@ It then load-tests one service at a time:
 | Repetitions | `REPETITIONS=3` |
 | Summary | median of the three repetitions |
 
-Override any of those environment variables, including `HEAP_LIMIT` (hex bytes, no `0x`; default `8000000`, 128 MiB). A full default run is about twelve minutes of load plus the release builds, because Rust and four .NET GC setups each get the same three payloads and three repetitions.
+Override any of those environment variables, including `HEAP_LIMIT` (hex bytes, no `0x`; default `8000000`, 128 MiB). A full default run is about fifteen minutes of load plus the release builds, because Rust, four .NET GC setups, and the Native AOT publish each get the same three payloads and three repetitions. Native AOT also needs clang and zlib development headers on Linux, and the C++ build tools on Windows.
 
 Outputs:
 
@@ -105,19 +106,22 @@ Outputs:
 - `bench/results/runs.jsonl` — one JSON object per repetition
 - `bench/results/environment.txt` — versions and machine facts
 
-## Measured GC variants
+## Measured results
 
-Same machine and the same load as the earlier single comparison (32 in-flight requests, 5 s warm-up, 10 s measured, three repetitions, server on CPUs 0-1). Cells are medians. The full p95/p99 and per-run table is [bench/results/results.md](bench/results/results.md).
+Same load for every row: 32 in-flight requests, 5 s warm-up, 10 s measured, three repetitions, server on CPUs 0-1. Cells are medians from the run after JSON source generation. p95 and every repetition are in [bench/results/results.md](bench/results/results.md).
 
 | Variant | 1 KiB req/s | p50 ms | p99 ms | CPU | RSS MiB | 64 KiB req/s | RSS MiB | 1 MiB req/s | p99 ms | RSS MiB |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| rust | 182545.1 | 0.167 | 0.292 | 197.6% | 4.7 | 15192.7 | 8.8 | 888.8 | 60.255 | 35.8 |
-| dotnet-server-gc | 100023.6 | 0.293 | 0.667 | 196.3% | 91.4 | 7780.1 | 110.2 | 546.1 | 94.527 | 220.9 |
-| dotnet-workstation | 94607.6 | 0.331 | 0.639 | 197.2% | 249.5 | 6177.0 | 98.8 | 541.7 | 90.943 | 333.8 |
-| dotnet-workstation-blocking | 106334.7 | 0.297 | 0.577 | 197.9% | 251.0 | 6793.7 | 101.4 | 533.3 | 92.287 | 214.4 |
-| dotnet-heap-limit | 95258.2 | 0.298 | 0.791 | 189.6% | 91.1 | 7490.9 | 109.6 | 438.4 | 120.447 | 187.0 |
+| rust | 185926.3 | 0.164 | 0.286 | 197.4% | 4.6 | 14973.2 | 8.9 | 875.4 | 62.463 | 36.2 |
+| dotnet-server-gc | 101956.6 | 0.291 | 0.648 | 196.2% | 89.6 | 7809.4 | 109.6 | 576.9 | 89.023 | 231.5 |
+| dotnet-workstation | 113089.5 | 0.280 | 0.530 | 197.5% | 249.1 | 7037.1 | 98.5 | 602.5 | 84.351 | 304.2 |
+| dotnet-workstation-blocking | 112339.3 | 0.285 | 0.506 | 198.1% | 250.4 | 7020.2 | 100.9 | 508.8 | 95.487 | 207.4 |
+| dotnet-heap-limit | 97517.9 | 0.292 | 0.780 | 189.8% | 90.6 | 7668.9 | 110.0 | 446.5 | 110.527 | 187.2 |
+| dotnet-aot | 92096.4 | 0.320 | 0.735 | 197.0% | 35.0 | 6752.0 | 53.2 | 518.9 | 97.919 | 149.8 |
 
-Workstation GC did not shrink the 1 KiB process. It grew it, from 91.4 MiB to 249.5 MiB, and throughput fell from 100023.6 to 94607.6 req/s. The 128 MiB heap cap does not move the 1 KiB RSS (91.1 MiB), because that process was already under the cap. At 1 MiB the cap cuts RSS from 220.9 MiB to 187.0 MiB and cuts throughput from 546.1 to 438.4 req/s. **dotnet-server-gc** is the .NET setup to keep: smallest 1 KiB heap among the .NET rows, and the fastest .NET mode at 64 KiB and 1 MiB. None of these settings approaches the Rust resident set.
+Time until the first successful `/health`, with a 20 ms poll: Rust 6 ms, Native AOT 33 ms, and the four JIT publishes 162–165 ms. The Native AOT file is 16,004,992 bytes and does not need the shared framework. The ReadyToRun apphost is 78,192 bytes plus a 74,240 byte DLL, and it needs the installed ASP.NET Core runtime.
+
+Native AOT is the .NET build that actually cuts the 1 KiB resident set, from 89.6 MiB to 35.0 MiB. Steady-state throughput is lower than Server GC JIT: 92096.4 vs 101956.6 req/s at 1 KiB, 6752.0 vs 7809.4 at 64 KiB, and 518.9 vs 576.9 at 1 MiB. The 1 MiB AOT repetitions were still rising (486.9, 518.9, 535.0), so that median is a little short of a longer run. It remains well above Rust's 4.6 MiB. Workstation GC was fastest at 1 KiB and 1 MiB in this run and held 249.1 MiB and 304.2 MiB. The 128 MiB heap cap still does not move the 1 KiB RSS and drops 1 MiB throughput from 576.9 to 446.5 req/s.
 
 ## Tests without a load run
 

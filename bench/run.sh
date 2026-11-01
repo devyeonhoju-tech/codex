@@ -49,13 +49,11 @@ dotnet publish "$ROOT/dotnet-service/CryptoBench.csproj" -c Release -o "$ROOT/do
   -p:ServerGarbageCollection=false -p:ConcurrentGarbageCollection=false --nologo
 python3 "$ROOT/bench/check_vectors.py"
 
-# Native AOT is a separate publish of the same project. ILC warnings are
-# errors in this repo, so a reflection JSON call fails the publish. That
-# failure is recorded and the GC variants still run.
+# Native AOT is a separate publish. ReadyToRun stays on for the JIT publishes above.
 echo "native AOT publish"
 set +e
 dotnet publish "$ROOT/dotnet-service/CryptoBench.csproj" -c Release -o "$ROOT/dotnet-service/publish-aot" \
-  -p:PublishAot=true --nologo >"$ROOT/bench/results/aot-publish.txt" 2>&1
+  -p:PublishAot=true -p:PublishReadyToRun=false --nologo >"$ROOT/bench/results/aot-publish.txt" 2>&1
 aot_status=$?
 set -e
 if [[ "$aot_status" -eq 0 && -x "$ROOT/dotnet-service/publish-aot/cryptobench" ]]; then
@@ -66,10 +64,16 @@ else
   AOT_BIN=""
 fi
 
-echo "interop against the release binaries"
+echo "interop against the ReadyToRun binary"
 bash "$ROOT/bench/interop_servers.sh" \
   "$ROOT/target/release/rust-service" \
   "$ROOT/dotnet-service/publish/cryptobench"
+if [[ -n "${AOT_BIN}" ]]; then
+  echo "interop against the Native AOT binary"
+  bash "$ROOT/bench/interop_servers.sh" \
+    "$ROOT/target/release/rust-service" \
+    "$AOT_BIN"
+fi
 
 {
   echo "date_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -97,6 +101,11 @@ bash "$ROOT/bench/interop_servers.sh" \
   echo "gc_heap_hard_limit_hex=${HEAP_LIMIT}"
   echo "gc_heap_hard_limit_bytes=$((16#$HEAP_LIMIT))"
   echo "aot_publish=$([[ -n "${AOT_BIN}" ]] && echo ok || echo failed)"
+  echo "r2r_apphost_bytes=$(stat -c %s "$ROOT/dotnet-service/publish/cryptobench")"
+  echo "r2r_dll_bytes=$(stat -c %s "$ROOT/dotnet-service/publish/cryptobench.dll")"
+  if [[ -n "${AOT_BIN}" ]]; then
+    echo "aot_binary_bytes=$(stat -c %s "$AOT_BIN")"
+  fi
 } >"$ROOT/bench/results/environment.txt"
 dotnet --info >"$ROOT/bench/results/dotnet-info.txt"
 rustc -vV >"$ROOT/bench/results/rustc-vv.txt"
@@ -115,11 +124,11 @@ trap cleanup EXIT
 
 wait_health() {
   local url="$1"
-  for _ in $(seq 1 100); do
-    if curl -fsS "$url/health" >/dev/null 2>&1; then
+  for _ in $(seq 1 500); do
+    if curl -fsS --max-time 1 "$url/health" >/dev/null 2>&1; then
       return 0
     fi
-    sleep 0.1
+    sleep 0.02
   done
   return 1
 }
@@ -151,12 +160,17 @@ run_variant() {
   local bin="$2"
   shift 2
   echo "benchmark $name"
+  local start_ns end_ns
+  start_ns=$(date +%s%N)
   start_server "$name" "$bin" "$@"
   if ! wait_health "$server_url"; then
     echo "$name failed to start" >&2
     cat "$ROOT/bench/results/${name}-bench.log" >&2 || true
     exit 1
   fi
+  end_ns=$(date +%s%N)
+  # Time from spawn until the first successful /health. The poll is 20 ms.
+  echo "startup_ms_${name}=$(( (end_ns - start_ns) / 1000000 ))" >>"$ROOT/bench/results/environment.txt"
   for size in 1024 65536 1048576; do
     for rep in $(seq 1 "$REPETITIONS"); do
       echo "  payload=$size rep=$rep"
@@ -187,35 +201,7 @@ run_variant dotnet-workstation-blocking "$BLOCKING_BIN"
 run_variant dotnet-heap-limit "$DOTNET_BIN" DOTNET_gcServer=1 DOTNET_gcConcurrent=1 DOTNET_GCHeapHardLimit="$HEAP_LIMIT"
 if [[ -n "${AOT_BIN}" ]]; then
   # Same Server GC settings as the baseline. Only the publish mode differs.
-  echo "benchmark dotnet-aot"
-  ASPNETCORE_URLS="http://127.0.0.1:8082" DOTNET_gcServer=1 DOTNET_gcConcurrent=1 \
-    taskset -c "$SERVER_CPUS" "$AOT_BIN" \
-    >"$ROOT/bench/results/dotnet-aot-bench.log" 2>&1 &
-  server_pid=$!
-  server_url="http://127.0.0.1:8082"
-  if ! wait_health "$server_url"; then
-    echo "dotnet-aot failed to start" >&2
-    cat "$ROOT/bench/results/dotnet-aot-bench.log" >&2 || true
-    exit 1
-  fi
-  for size in 1024 65536 1048576; do
-    for rep in $(seq 1 "$REPETITIONS"); do
-      echo "  payload=$size rep=$rep"
-      taskset -c "$CLIENT_CPUS" "$ROOT/target/release/crypto-bench" load \
-        --url "$server_url/v1/process" \
-        --pid "$server_pid" \
-        --service "dotnet-aot" \
-        --payload-bytes "$size" \
-        --repetition "$rep" \
-        --concurrency "$CONCURRENCY" \
-        --warmup-secs "$WARMUP_SECS" \
-        --duration-secs "$DURATION_SECS" \
-        --output "$ROOT/bench/results/runs.jsonl"
-    done
-  done
-  kill "$server_pid" >/dev/null 2>&1 || true
-  wait "$server_pid" >/dev/null 2>&1 || true
-  server_pid=""
+  run_variant dotnet-aot "$AOT_BIN" DOTNET_gcServer=1 DOTNET_gcConcurrent=1
 fi
 
 taskset -c "$CLIENT_CPUS" "$ROOT/target/release/crypto-bench" report \

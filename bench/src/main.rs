@@ -640,7 +640,7 @@ Summary values are the **median of {reps} repetitions**. Each repetition is a cl
 - `dotnet-workstation`: same binary, `DOTNET_gcServer=0` (background GC stays on).
 - `dotnet-workstation-blocking`: second publish with `ServerGarbageCollection=false` and `ConcurrentGarbageCollection=false`. `DOTNET_gcConcurrent=0` does not override `System.GC.Concurrent` when that property is already in runtimeconfig.json.
 - `dotnet-heap-limit`: Server GC baseline plus `DOTNET_GCHeapHardLimit` (hex bytes, value in `environment.txt`). 128 MiB. A 64 MiB cap returned HTTP 500 on the 1 MiB payload.
-- Native AOT is attempted on every run. If publish fails, `bench/results/aot-publish.txt` has the compiler output and there is no AOT row.
+- `dotnet-aot`: Native AOT publish of the same program (`PublishAot=true`, ReadyToRun off for that publish), Server GC and background GC. Request and response JSON go through `ProtocolJsonContext`. The JIT variants use that context too, so they are remeasured with it. If publish fails, there is no AOT row and `bench/results/aot-publish.txt` has the error.
 - Warm-up is short. Three repetitions and the median are there so a single cold run does not decide the row.
 
 ## Environment
