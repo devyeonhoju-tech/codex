@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+  <meta name="theme-color" content="#07080c" />
+  <title>Gloam</title>
+  <meta name="description" content="Gloam is a small survivors-like. Move, let your bolts fly, and last the night." />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect fill='%2307080c' width='32' height='32'/%3E%3Ccircle fill='%23f4ecd8' cx='14' cy='16' r='8'/%3E%3Ccircle fill='%2307080c' cx='18' cy='14' r='7'/%3E%3C/svg%3E" />
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+  <div id="app">
+    <canvas id="view" aria-hidden="true"></canvas>
+    <div id="grain" aria-hidden="true"></div>
+
+    <div id="hud" hidden>
+      <div class="hud-top">
+        <div class="level-badge">Lv <span id="hud-level">1</span></div>
+        <div id="hud-timer">00:00</div>
+        <div class="hud-side">
+          <div class="kills">Kills <span id="hud-kills">0</span></div>
+          <button id="mute" type="button" aria-pressed="false" aria-label="Mute sound">Sound on</button>
+        </div>
+      </div>
+      <div class="bars">
+        <div class="bar hp" id="hp-meter" role="meter" aria-label="Health" aria-valuemin="0" aria-valuemax="100" aria-valuenow="100">
+          <div id="hp-fill"></div>
+          <span id="hp-text">100 / 100</span>
+        </div>
+        <div class="bar xp" id="xp-meter" role="meter" aria-label="Experience" aria-valuemin="0" aria-valuemax="4" aria-valuenow="0">
+          <div id="xp-fill"></div>
+        </div>
+      </div>
+      <p id="hint">WASD or arrows to move. Bolts fire on their own. Curve back through the gems.</p>
+    </div>
+
+    <div id="stick" hidden><div id="knob"></div></div>
+
+    <section id="title" class="overlay">
+      <div class="panel">
+        <p class="eyebrow">A survivors-like</p>
+        <h1>Gloam</h1>
+        <p class="lede">Night things want what warmth you have left. Walk the field. Your bolt does the killing, gems do the growing, and the dark gets busier the longer you last.</p>
+        <button id="start" class="primary" type="button">Begin the night</button>
+        <ul class="controls">
+          <li><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> or arrows to move</li>
+          <li>Touch and drag anywhere to move</li>
+          <li>Attacks and gem pickup happen on their own</li>
+          <li><kbd>1</kbd><kbd>2</kbd><kbd>3</kbd> pick an upgrade at level-up</li>
+          <li><kbd>M</kbd> toggles sound · <kbd>R</kbd> starts again after you fall</li>
+        </ul>
+      </div>
+    </section>
+
+    <section id="levelup" class="overlay" hidden>
+      <div class="panel">
+        <p class="eyebrow">Level <span id="levelup-level">2</span></p>
+        <h2>Choose an art</h2>
+        <p class="lede">One of these is yours. The night waits.</p>
+        <div id="cards" class="cards"></div>
+      </div>
+    </section>
+
+    <section id="gameover" class="overlay" hidden>
+      <div class="panel">
+        <p class="eyebrow">The night takes you</p>
+        <h2>Snuffed out</h2>
+        <dl class="stats">
+          <div><dt>Survived</dt><dd id="stat-time">00:00</dd></div>
+          <div><dt>Level</dt><dd id="stat-level">1</dd></div>
+          <div><dt>Kills</dt><dd id="stat-kills">0</dd></div>
+          <div><dt>Score</dt><dd id="stat-score">0</dd></div>
+        </dl>
+        <p id="stat-best" class="best"></p>
+        <button id="restart" class="primary" type="button">Face the night again</button>
+      </div>
+    </section>
+
+    <div id="live" class="sr-only" aria-live="polite"></div>
+  </div>
+  <script src="js/content.js"></script>
+  <script src="js/input.js"></script>
+  <script src="js/audio.js"></script>
+  <script src="js/game.js"></script>
+  <script src="js/main.js"></script>
+</body>
+</html>

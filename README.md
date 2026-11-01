@@ -1,8 +1,67 @@
+# Codex
+
+This repository holds two browser games and a Rust versus .NET benchmark. The games and the GitHub Pages workflow are separate from the benchmark services.
+
+- **Gloam**, a survivors-like, is the site root. Play it from `index.html`.
+- **전생검신**, a random-defense game, is in [`geomsin-defense/`](geomsin-defense/README.md).
+- The AES-GCM comparison is in [`rust-service/`](rust-service/), [`dotnet-service/`](dotnet-service/), and [`bench/`](bench/WIRE_FORMAT.md).
+
+# Gloam
+
+A small survivors-like you can play in the browser. Move through a dark field, let your bolt fire on its own, pick up the gems enemies drop, and choose an upgrade each time you level. The run ends when your health reaches zero.
+
+Everything on screen is drawn with canvas shapes and CSS. There are no image assets and no third-party libraries.
+
+## Play on your phone
+
+After this is merged to `main` and GitHub Pages is pointed at Actions, the game is served over HTTPS at:
+
+**https://devyeonhoju-tech.github.io/codex/**
+
+That address stays put. It updates a minute or two after each push to `main`. On a phone, drag anywhere on the field to move. The page does not scroll or pinch-zoom while you play, and turning the phone refits the field.
+
+This pull request cannot flip the repository setting. Pages is not enabled yet. Do this once, as the repo owner:
+
+1. Merge the pull request into `main`.
+2. On GitHub, open **Settings → Pages** for `devyeonhoju-tech/codex`.
+3. Under **Build and deployment**, set **Source** to **GitHub Actions**.
+4. Open the **Actions** tab. The workflow **Deploy Gloam to GitHub Pages** starts on the merge. If it does not, choose that workflow and press **Run workflow**. If GitHub asks you to approve the `github-pages` environment, approve it.
+5. When the run is green, open https://devyeonhoju-tech.github.io/codex/ on your phone.
+
+The first visit can take a minute while the certificate is issued. A 404 right after the run finishes usually means the site is still propagating. Reload once.
+
+## Run locally
+
+Open `index.html` in a browser.
+
+Or serve the folder and open the printed address:
+
+```bash
+python3 -m http.server 8080
+```
+
+No install step and no build.
+
+## Controls
+
+- **Move:** `W` `A` `S` `D` or the arrow keys
+- **Touch:** press and drag anywhere on the field. A stick appears under your finger. A mouse drag does the same.
+- **Attack:** automatic, toward the nearest enemy
+- **Level up:** the run pauses. Click one of up to three arts, or press `1` `2` `3`
+- **Sound:** the button in the corner, or `M`
+- **After you fall:** `Face the night again`, or press `Enter` or `R`
+
+Health, experience, level, time survived, and kills stay along the top of the screen.
+
+## What a run is
+
+Shamblers arrive first. Skitters show up soon after and can catch you. Brutes are slow, large, and drop three gems. Standing in a crowd blocks your path and chips your health. Gems fly to you only from a short distance, so curve back through the trail you leave behind. Magnetism makes that reach longer. Each level offers a random handful of upgrades: damage, attack speed, extra bolts, move speed, pickup range, health, pierce, bolt size, or regeneration.
+
 # Rust and .NET AES-GCM services
 
 Two small HTTP services that do the same work, plus a load test that runs them under the same conditions.
 
-`POST /v1/process` takes an AES-256-GCM body, decrypts it, runs one deterministic JSON step (FNV-1a 32-bit over the UTF-8 `data` field, then a xor), and returns a freshly encrypted JSON response. The byte layout is in [bench/WIRE_FORMAT.md](bench/WIRE_FORMAT.md). Both services and the Python client follow that file.
+`POST /v1/process` takes an AES-256-GCM body, decrypts it, runs one deterministic JSON step (FNV-1a 32-bit over the whole decrypted request, echoing `data` into the response), and returns a freshly encrypted response. The byte layout is in [bench/WIRE_FORMAT.md](bench/WIRE_FORMAT.md). Both services and the Python client follow that file.
 
 ```
 rust-service/     axum + tokio + RustCrypto aes-gcm
@@ -10,7 +69,7 @@ dotnet-service/   ASP.NET Core 10 minimal API + System.Security.Cryptography.Aes
 bench/            wire format, shared vectors, load generator, scripts, results
 ```
 
-Nothing here is part of a game or a GitHub Pages site. The servers bind to loopback unless you set `BIND` or `ASPNETCORE_URLS`.
+The benchmark servers bind to loopback unless you set `BIND` or `ASPNETCORE_URLS`.
 
 ## Key
 
@@ -29,7 +88,7 @@ Nothing here is part of a game or a GitHub Pages site. The servers bind to loopb
 | JSON | `serde_json` | `System.Text.Json`, camelCase, `UnsafeRelaxedJsonEscaping` |
 | AES object | one `Aes256Gcm` shared across tasks (`encrypt` takes `&self`) | one `AesGcm` per thread (`ThreadLocal`); the type is not thread-safe |
 
-`bench/run.sh` measures Rust once and four .NET GC setups, all with the same payloads, pinning, warm-up, duration, and repetitions:
+`bench/run.sh` measures Rust once and four .NET GC setups, plus Native AOT, all with the same payloads, pinning, warm-up, duration, and repetitions:
 
 | Row | What it is |
 | --- | --- |
@@ -44,8 +103,6 @@ Request and response JSON go through `ProtocolJsonContext` (source generation, s
 
 The Linux script pins the server to CPUs 0-1 and the load generator to CPUs 2-3. They still share memory bandwidth, cache, and the hypervisor.
 
-The Linux script pins the server to CPUs 0-1 and the load generator to CPUs 2-3. They still share memory bandwidth, cache, and the hypervisor.
-
 ## Prerequisites
 
 ### Linux
@@ -55,7 +112,7 @@ The Linux script pins the server to CPUs 0-1 and the load generator to CPUs 2-3.
 - Python 3 with the `cryptography` package (`pip install -r bench/testdata/requirements.txt`, or your distro's `python3-cryptography`)
 - `curl`, `taskset` (util-linux), and a shell
 
-No C compiler is required. The Rust crates in this repo are pure Rust.
+No C compiler is required for the benchmark's Rust crates. Native AOT for the .NET service needs clang and zlib headers on Linux.
 
 ```bash
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
@@ -65,12 +122,12 @@ python3 -m pip install --user -r bench/testdata/requirements.txt
 
 ### Windows
 
-- rustup with the toolchain in `rust-toolchain.toml` (the MSVC toolchain is fine; this repo does not compile C)
+- rustup with the toolchain in `rust-toolchain.toml` (the MSVC toolchain is fine; this repo does not compile C for the benchmark crates)
 - .NET SDK 10
 - Python 3 on `PATH`, then `py -3 -m pip install -r bench/testdata/requirements.txt`
 - PowerShell 5.1 or PowerShell 7
 
-The Windows script does not pin CPUs. `crypto-bench` reads `/proc` for CPU and RSS, so on Windows those columns are `n/a`. Latency and requests/sec still come from the same load generator. For the numbers this repository publishes, use Linux or WSL.
+The Windows script does not pin CPUs. `crypto-bench` reads `/proc` for CPU and RSS, so on Windows those columns are `n/a`. Latency and requests/sec still come from the same load generator. For the numbers this repository publishes, use Linux or WSL. Native AOT on Windows needs the C++ build tools.
 
 ## Run
 
@@ -142,6 +199,6 @@ Rust tests include the HTTP handler (encrypt, post, decrypt). .NET tests cover t
 
 These are localhost numbers from one machine. They include HTTP, AES-GCM, and a small JSON transform. They are not a language ranking, not a TLS test, and not a pure cipher microbenchmark.
 
-The load generator encrypts one request and resends those bytes. Reusing a GCM nonce is unsafe in production; it only keeps the request body identical. Each response still uses a new nonce. One response per repetition is decrypted and checked.
+The load generator encrypts one request and resends those bytes. Reusing a GCM nonce is unsafe in production; it only keeps the request body identical. Each response still uses a new nonce. During the measured window every 32nd success is decrypted and compared in full.
 
 Absolute rates on a shared cloud VM move around. Read the median, the three repetitions, and `environment.txt` together. Rerun the script on the machine you care about.

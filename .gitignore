@@ -1,3 +1,13 @@
+.DS_Store
+Thumbs.db
+node_modules/
+_site/
+*.log
+.idea/
+.vscode/
+*.swp
+.vs/
+**/*.user
 /target/
 **/*.rs.bk
 dotnet-service/publish/
@@ -5,10 +15,6 @@ dotnet-service/publish-aot/
 dotnet-service/publish-ws-blocking/
 **/bin/
 **/obj/
-**/*.user
-.vs/
-.idea/
-*.swp
 __pycache__/
 *.pyc
 .venv/
