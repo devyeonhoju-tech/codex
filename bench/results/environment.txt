@@ -1,5 +1,5 @@
-date_utc=2026-11-01T10:09:59Z
-git=f544b618d3b64c19761d06723bceaa0d51eb4dd9
+date_utc=2026-11-01T10:56:27Z
+git=83729cb80626fd3ea67aaa49ebb29628b2cbc34e
 rustc=rustc 1.99.1 (58cf8f9c3 2026-10-13)
 cargo=cargo 1.99.1 (5f94df478 2026-08-27)
 dotnet_sdk=10.0.403
@@ -20,3 +20,6 @@ server_cpus=0,1
 client_cpus=2,3
 openssl=OpenSSL 3.0.13 30 Jan 2024 (Library: OpenSSL 3.0.13 30 Jan 2024)
 python=Python 3.12.3
+gc_heap_hard_limit_hex=8000000
+gc_heap_hard_limit_bytes=134217728
+aot_publish=failed

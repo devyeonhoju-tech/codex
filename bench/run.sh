@@ -23,6 +23,9 @@ DURATION_SECS="${DURATION_SECS:-10}"
 REPETITIONS="${REPETITIONS:-3}"
 SERVER_CPUS="${SERVER_CPUS:-0,1}"
 CLIENT_CPUS="${CLIENT_CPUS:-2,3}"
+# Hex bytes, no 0x. 0x8000000 = 128 MiB. A 64 MiB cap (0x4000000) returned HTTP 500
+# on the 1 MiB payload at concurrency 32. 128 MiB completed that payload.
+HEAP_LIMIT="${HEAP_LIMIT:-8000000}"
 
 mkdir -p "$ROOT/bench/results"
 command -v curl >/dev/null
@@ -39,7 +42,29 @@ cargo test -p rust-service
 cargo build --release -p rust-service -p crypto-bench
 dotnet test "$ROOT/dotnet-service/tests/CryptoBench.Tests.csproj" -c Release --nologo
 dotnet publish "$ROOT/dotnet-service/CryptoBench.csproj" -c Release -o "$ROOT/dotnet-service/publish" --nologo
+# DOTNET_gcConcurrent does not override System.GC.Concurrent when the property is
+# already in runtimeconfig.json (verified on this runtime). Blocking workstation
+# GC is a second publish with the two MSBuild GC properties turned off.
+dotnet publish "$ROOT/dotnet-service/CryptoBench.csproj" -c Release -o "$ROOT/dotnet-service/publish-ws-blocking" \
+  -p:ServerGarbageCollection=false -p:ConcurrentGarbageCollection=false --nologo
 python3 "$ROOT/bench/check_vectors.py"
+
+# Native AOT is a separate publish of the same project. ILC warnings are
+# errors in this repo, so a reflection JSON call fails the publish. That
+# failure is recorded and the GC variants still run.
+echo "native AOT publish"
+set +e
+dotnet publish "$ROOT/dotnet-service/CryptoBench.csproj" -c Release -o "$ROOT/dotnet-service/publish-aot" \
+  -p:PublishAot=true --nologo >"$ROOT/bench/results/aot-publish.txt" 2>&1
+aot_status=$?
+set -e
+if [[ "$aot_status" -eq 0 && -x "$ROOT/dotnet-service/publish-aot/cryptobench" ]]; then
+  echo "aot publish ok"
+  AOT_BIN="$ROOT/dotnet-service/publish-aot/cryptobench"
+else
+  echo "aot publish failed (see bench/results/aot-publish.txt)"
+  AOT_BIN=""
+fi
 
 echo "interop against the release binaries"
 bash "$ROOT/bench/interop_servers.sh" \
@@ -69,6 +94,9 @@ bash "$ROOT/bench/interop_servers.sh" \
   echo "client_cpus=$CLIENT_CPUS"
   echo "openssl=$(openssl version)"
   echo "python=$(python3 --version)"
+  echo "gc_heap_hard_limit_hex=${HEAP_LIMIT}"
+  echo "gc_heap_hard_limit_bytes=$((16#$HEAP_LIMIT))"
+  echo "aot_publish=$([[ -n "${AOT_BIN}" ]] && echo ok || echo failed)"
 } >"$ROOT/bench/results/environment.txt"
 dotnet --info >"$ROOT/bench/results/dotnet-info.txt"
 rustc -vV >"$ROOT/bench/results/rustc-vv.txt"
@@ -98,27 +126,35 @@ wait_health() {
 
 start_server() {
   local name="$1"
+  local bin="$2"
+  shift 2
   if [[ "$name" == "rust" ]]; then
-    PORT=8081 BIND=127.0.0.1 TOKIO_WORKER_THREADS=2 \
-      taskset -c "$SERVER_CPUS" "$ROOT/target/release/rust-service" \
+    env -u DOTNET_gcServer -u DOTNET_gcConcurrent -u DOTNET_GCHeapHardLimit \
+      PORT=8081 BIND=127.0.0.1 TOKIO_WORKER_THREADS=2 \
+      taskset -c "$SERVER_CPUS" "$bin" \
       >"$ROOT/bench/results/rust-bench.log" 2>&1 &
     server_pid=$!
     server_url="http://127.0.0.1:8081"
   else
-    ASPNETCORE_URLS=http://127.0.0.1:8082 \
-      taskset -c "$SERVER_CPUS" "$ROOT/dotnet-service/publish/cryptobench" \
-      >"$ROOT/bench/results/dotnet-bench.log" 2>&1 &
+    env -u DOTNET_gcServer -u DOTNET_gcConcurrent -u DOTNET_GCHeapHardLimit -u DOTNET_GCConserveMemory \
+      "$@" \
+      ASPNETCORE_URLS="http://127.0.0.1:8082" \
+      taskset -c "$SERVER_CPUS" "$bin" \
+      >"$ROOT/bench/results/${name}-bench.log" 2>&1 &
     server_pid=$!
     server_url="http://127.0.0.1:8082"
   fi
 }
 
-for service in rust dotnet; do
-  echo "benchmark $service"
-  start_server "$service"
+run_variant() {
+  local name="$1"
+  local bin="$2"
+  shift 2
+  echo "benchmark $name"
+  start_server "$name" "$bin" "$@"
   if ! wait_health "$server_url"; then
-    echo "$service failed to start" >&2
-    cat "$ROOT/bench/results/${service}-bench.log" >&2 || true
+    echo "$name failed to start" >&2
+    cat "$ROOT/bench/results/${name}-bench.log" >&2 || true
     exit 1
   fi
   for size in 1024 65536 1048576; do
@@ -127,7 +163,7 @@ for service in rust dotnet; do
       taskset -c "$CLIENT_CPUS" "$ROOT/target/release/crypto-bench" load \
         --url "$server_url/v1/process" \
         --pid "$server_pid" \
-        --service "$service" \
+        --service "$name" \
         --payload-bytes "$size" \
         --repetition "$rep" \
         --concurrency "$CONCURRENCY" \
@@ -140,7 +176,47 @@ for service in rust dotnet; do
   wait "$server_pid" >/dev/null 2>&1 || true
   server_pid=""
   sleep 1
-done
+}
+
+DOTNET_BIN="$ROOT/dotnet-service/publish/cryptobench"
+BLOCKING_BIN="$ROOT/dotnet-service/publish-ws-blocking/cryptobench"
+run_variant rust "$ROOT/target/release/rust-service"
+run_variant dotnet-server-gc "$DOTNET_BIN" DOTNET_gcServer=1 DOTNET_gcConcurrent=1
+run_variant dotnet-workstation "$DOTNET_BIN" DOTNET_gcServer=0 DOTNET_gcConcurrent=1
+run_variant dotnet-workstation-blocking "$BLOCKING_BIN"
+run_variant dotnet-heap-limit "$DOTNET_BIN" DOTNET_gcServer=1 DOTNET_gcConcurrent=1 DOTNET_GCHeapHardLimit="$HEAP_LIMIT"
+if [[ -n "${AOT_BIN}" ]]; then
+  # Same Server GC settings as the baseline. Only the publish mode differs.
+  echo "benchmark dotnet-aot"
+  ASPNETCORE_URLS="http://127.0.0.1:8082" DOTNET_gcServer=1 DOTNET_gcConcurrent=1 \
+    taskset -c "$SERVER_CPUS" "$AOT_BIN" \
+    >"$ROOT/bench/results/dotnet-aot-bench.log" 2>&1 &
+  server_pid=$!
+  server_url="http://127.0.0.1:8082"
+  if ! wait_health "$server_url"; then
+    echo "dotnet-aot failed to start" >&2
+    cat "$ROOT/bench/results/dotnet-aot-bench.log" >&2 || true
+    exit 1
+  fi
+  for size in 1024 65536 1048576; do
+    for rep in $(seq 1 "$REPETITIONS"); do
+      echo "  payload=$size rep=$rep"
+      taskset -c "$CLIENT_CPUS" "$ROOT/target/release/crypto-bench" load \
+        --url "$server_url/v1/process" \
+        --pid "$server_pid" \
+        --service "dotnet-aot" \
+        --payload-bytes "$size" \
+        --repetition "$rep" \
+        --concurrency "$CONCURRENCY" \
+        --warmup-secs "$WARMUP_SECS" \
+        --duration-secs "$DURATION_SECS" \
+        --output "$ROOT/bench/results/runs.jsonl"
+    done
+  done
+  kill "$server_pid" >/dev/null 2>&1 || true
+  wait "$server_pid" >/dev/null 2>&1 || true
+  server_pid=""
+fi
 
 taskset -c "$CLIENT_CPUS" "$ROOT/target/release/crypto-bench" report \
   --input "$ROOT/bench/results/runs.jsonl" \

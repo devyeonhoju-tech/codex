@@ -520,7 +520,11 @@ fn report(args: ReportArgs) -> anyhow::Result<()> {
             groups.push(key);
         }
     }
-    groups.sort_by(|a, b| a.1.cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
+    groups.sort_by(|a, b| {
+        a.1.cmp(&b.1)
+            .then_with(|| variant_order(&a.0).cmp(&variant_order(&b.0)))
+            .then_with(|| a.0.cmp(&b.0))
+    });
 
     let mut notes = Vec::new();
     let mut summary = String::new();
@@ -567,6 +571,7 @@ fn report(args: ReportArgs) -> anyhow::Result<()> {
     ordered.sort_by(|a, b| {
         a.payload_bytes
             .cmp(&b.payload_bytes)
+            .then_with(|| variant_order(&a.service).cmp(&variant_order(&b.service)))
             .then_with(|| a.service.cmp(&b.service))
             .then_with(|| a.repetition.cmp(&b.repetition))
     });
@@ -631,7 +636,11 @@ Summary values are the **median of {reps} repetitions**. Each repetition is a cl
 - Linux affinity during `run.sh`: server on CPUs 0-1, load generator on CPUs 2-3. They still share memory bandwidth, last-level cache, and the hypervisor.
 - No TLS. The work is HTTP framing, AES-256-GCM, JSON, and the FNV-1a step.
 - Rust: release profile, thin LTO, codegen-units = 1, axum/tokio, RustCrypto `aes-gcm` with runtime AES-NI detection. Not `target-cpu=native`.
-- .NET 10: `dotnet publish -c Release`, framework-dependent, ReadyToRun, Server GC, tiered PGO, invariant globalization. Not Native AOT.
+- .NET 10 baseline (`dotnet-server-gc`): `dotnet publish -c Release`, framework-dependent, ReadyToRun, Server GC, background GC, tiered PGO, invariant globalization.
+- `dotnet-workstation`: same binary, `DOTNET_gcServer=0` (background GC stays on).
+- `dotnet-workstation-blocking`: second publish with `ServerGarbageCollection=false` and `ConcurrentGarbageCollection=false`. `DOTNET_gcConcurrent=0` does not override `System.GC.Concurrent` when that property is already in runtimeconfig.json.
+- `dotnet-heap-limit`: Server GC baseline plus `DOTNET_GCHeapHardLimit` (hex bytes, value in `environment.txt`). 128 MiB. A 64 MiB cap returned HTTP 500 on the 1 MiB payload.
+- Native AOT is attempted on every run. If publish fails, `bench/results/aot-publish.txt` has the compiler output and there is no AOT row.
 - Warm-up is short. Three repetitions and the median are there so a single cold run does not decide the row.
 
 ## Environment
@@ -692,6 +701,18 @@ A 4-vCPU guest cannot say which language is faster in production. Use this as a 
         args.csv.display()
     );
     Ok(())
+}
+
+fn variant_order(name: &str) -> u8 {
+    match name {
+        "rust" => 0,
+        "dotnet-server-gc" => 1,
+        "dotnet-workstation" => 2,
+        "dotnet-workstation-blocking" => 3,
+        "dotnet-heap-limit" => 4,
+        "dotnet-aot" => 5,
+        _ => 9,
+    }
 }
 
 fn fmt_metric(value: f64, digits: usize) -> String {

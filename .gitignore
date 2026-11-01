@@ -1,6 +1,8 @@
 /target/
 **/*.rs.bk
 dotnet-service/publish/
+dotnet-service/publish-aot/
+dotnet-service/publish-ws-blocking/
 **/bin/
 **/obj/
 **/*.user

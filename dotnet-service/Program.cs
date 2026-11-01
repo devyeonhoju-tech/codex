@@ -69,8 +69,12 @@ app.MapPost("/v1/process", async (HttpRequest request, CryptoEngine crypto, Canc
 
 app.Lifetime.ApplicationStarted.Register(() =>
 {
+    var memory = GC.GetGCMemoryInfo();
+    var gc = GC.GetConfigurationVariables();
+    static string Show(IReadOnlyDictionary<string, object> values, string key) =>
+        values.TryGetValue(key, out var value) ? value?.ToString() ?? "" : "unset";
     Console.Error.WriteLine(
-        $"listening {string.Join(",", app.Urls)} processor_count={Environment.ProcessorCount} server_gc={System.Runtime.GCSettings.IsServerGC} pid={Environment.ProcessId}");
+        $"listening {string.Join(",", app.Urls)} processor_count={Environment.ProcessorCount} server_gc={System.Runtime.GCSettings.IsServerGC} concurrent_gc={Show(gc, "ConcurrentGC")} heap_hard_limit={Show(gc, "GCHeapHardLimit")} total_available_bytes={memory.TotalAvailableMemoryBytes} pid={Environment.ProcessId}");
 });
 
 app.Run();
