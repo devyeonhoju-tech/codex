@@ -1,0 +1,25 @@
+[package]
+name = "crypto-bench"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Load generator and report writer for the Rust vs .NET benchmark"
+
+[[bin]]
+name = "crypto-bench"
+path = "src/main.rs"
+
+[dependencies]
+aes-gcm = "0.10"
+anyhow = "1"
+bytes = "1"
+clap = { version = "4", features = ["derive"] }
+hdrhistogram = "7"
+http-body-util = "0.1"
+hyper = { version = "1", features = ["client", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+libc = "0.2"
+rust-service = { path = "../rust-service" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "time"] }

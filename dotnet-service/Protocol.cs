@@ -1,0 +1,118 @@
+using System.Text;
+using System.Text.Encodings.Web;
+using System.Text.Json;
+using System.Text.Json.Serialization;
+
+namespace CryptoBench;
+
+/// <summary>
+/// JSON options and the FNV-1a processing step from bench/WIRE_FORMAT.md.
+/// Checksums are over UTF-8 bytes, not UTF-16 code units.
+/// </summary>
+public static class Protocol
+{
+    public const int MaxIdBytes = 256;
+    public const int MaxDataBytes = 2_000_000;
+    public const int MaxBody = 8 * 1024 * 1024;
+
+    /// <summary>
+    /// Options for tests and any non-trimmed caller. The hot path uses
+    /// <see cref="Context"/>, which carries the same naming and escaping.
+    /// </summary>
+    public static readonly JsonSerializerOptions Json = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        PropertyNameCaseInsensitive = false,
+        Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+        WriteIndented = false,
+    };
+
+    /// <summary>
+    /// Source-generated contract for Native AOT. A copy of <see cref="Json"/> is
+    /// passed in so the context can own its resolver without mutating <see cref="Json"/>.
+    /// </summary>
+    public static readonly ProtocolJsonContext Context = new(new JsonSerializerOptions(Json));
+
+    public static uint Fnv1a32(ReadOnlySpan<byte> data)
+    {
+        unchecked
+        {
+            uint hash = 2166136261;
+            foreach (byte b in data)
+            {
+                hash ^= b;
+                hash *= 16777619;
+            }
+            return hash;
+        }
+    }
+
+    public static bool TryProcess(ReadOnlySpan<byte> plaintext, out byte[] response, out string error)
+    {
+        response = Array.Empty<byte>();
+        ProcessRequest? request;
+        try
+        {
+            request = JsonSerializer.Deserialize(plaintext, Context.ProcessRequest);
+        }
+        catch (JsonException)
+        {
+            error = "invalid_json";
+            return false;
+        }
+
+        if (request is null || request.Id is null || request.Data is null || request.Multiplier is null)
+        {
+            error = "invalid_request";
+            return false;
+        }
+
+        int idBytes = Encoding.UTF8.GetByteCount(request.Id);
+        if (idBytes == 0 || idBytes > MaxIdBytes)
+        {
+            error = "invalid_request";
+            return false;
+        }
+
+        int dataBytes = Encoding.UTF8.GetByteCount(request.Data);
+        if (dataBytes > MaxDataBytes)
+        {
+            error = "invalid_request";
+            return false;
+        }
+
+        // Hash every byte of the decrypted body, including JSON syntax, then copy
+        // Data into the response so the ciphertext covers the whole payload.
+        if (plaintext.Length > int.MaxValue)
+        {
+            error = "invalid_request";
+            return false;
+        }
+
+        uint length = (uint)plaintext.Length;
+        uint checksum = Fnv1a32(plaintext);
+        uint tag = checksum ^ request.Multiplier.Value ^ length;
+        response = JsonSerializer.SerializeToUtf8Bytes(
+            new ProcessResponse(request.Id, request.Data, checksum, length, tag),
+            Context.ProcessResponse);
+        error = "";
+        return true;
+    }
+}
+
+public sealed class ProcessRequest
+{
+    public string? Id { get; set; }
+    public string? Data { get; set; }
+    public uint? Multiplier { get; set; }
+}
+
+public sealed record ProcessResponse(string Id, string Data, uint Checksum, uint Length, uint Tag);
+
+[JsonSourceGenerationOptions(
+    PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase,
+    PropertyNameCaseInsensitive = false,
+    WriteIndented = false)]
+[JsonSerializable(typeof(ProcessRequest))]
+[JsonSerializable(typeof(ProcessResponse))]
+public partial class ProtocolJsonContext : JsonSerializerContext;

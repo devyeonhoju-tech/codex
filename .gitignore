@@ -6,3 +6,17 @@ _site/
 .idea/
 .vscode/
 *.swp
+.vs/
+**/*.user
+/target/
+**/*.rs.bk
+dotnet-service/publish/
+dotnet-service/publish-aot/
+dotnet-service/publish-ws-blocking/
+**/bin/
+**/obj/
+__pycache__/
+*.pyc
+.venv/
+bench/results/*.log
+bench/results/*.err

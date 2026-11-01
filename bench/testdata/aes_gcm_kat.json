@@ -1,0 +1,29 @@
+{
+  "algorithm": "AES-256-GCM",
+  "aad": "empty",
+  "keyHex": "0123456789abcdeffedcba98765432100123456789abcdeffedcba9876543210",
+  "note": "Public benchmarking key. Not a secret. Generated with Python cryptography AESGCM, which matches OpenSSL EVP.",
+  "cases": [
+    {
+      "name": "empty",
+      "nonceHex": "00112233445566778899aabb",
+      "plaintextHex": "",
+      "ciphertextHex": "",
+      "tagHex": "eadb50926a37e961d16ab616f085e619"
+    },
+    {
+      "name": "hello",
+      "nonceHex": "ffffffffffffffffffffffff",
+      "plaintextHex": "68656c6c6f",
+      "ciphertextHex": "7a3d5efbbf",
+      "tagHex": "5add9e4813229a8af4531ad79c8df82a"
+    },
+    {
+      "name": "block",
+      "nonceHex": "000000000000000000000000",
+      "plaintextHex": "30313233343536373839616263646566",
+      "ciphertextHex": "8ed6c29eb801935bc7b2577bb7e5faa0",
+      "tagHex": "9bac5b3e30a63ce1b57961c466118125"
+    }
+  ]
+}

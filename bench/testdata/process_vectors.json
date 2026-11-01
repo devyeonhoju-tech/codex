@@ -1,0 +1,93 @@
+{
+  "algorithm": "FNV-1a 32-bit over every byte of the decrypted request. length is that byte count. tag = checksum XOR multiplier XOR length. The response echoes data and is encrypted in full.",
+  "cases": [
+    {
+      "name": "empty-data",
+      "id": "e",
+      "data": "",
+      "multiplier": 0,
+      "checksum": 371427490,
+      "length": 35,
+      "tag": 371427457,
+      "requestJson": "{\"id\":\"e\",\"data\":\"\",\"multiplier\":0}",
+      "responseJson": "{\"id\":\"e\",\"data\":\"\",\"checksum\":371427490,\"length\":35,\"tag\":371427457}"
+    },
+    {
+      "name": "hello",
+      "id": "hello",
+      "data": "hello",
+      "multiplier": 3,
+      "checksum": 1987814666,
+      "length": 44,
+      "tag": 1987814693,
+      "requestJson": "{\"id\":\"hello\",\"data\":\"hello\",\"multiplier\":3}",
+      "responseJson": "{\"id\":\"hello\",\"data\":\"hello\",\"checksum\":1987814666,\"length\":44,\"tag\":1987814693}"
+    },
+    {
+      "name": "unicode-data",
+      "id": "cafe",
+      "data": "café",
+      "multiplier": 7,
+      "checksum": 3303357927,
+      "length": 43,
+      "tag": 3303357899,
+      "requestJson": "{\"id\":\"cafe\",\"data\":\"café\",\"multiplier\":7}",
+      "responseJson": "{\"id\":\"cafe\",\"data\":\"café\",\"checksum\":3303357927,\"length\":43,\"tag\":3303357899}"
+    },
+    {
+      "name": "unicode-id",
+      "id": "café",
+      "data": "x",
+      "multiplier": 2,
+      "checksum": 1685552221,
+      "length": 40,
+      "tag": 1685552247,
+      "requestJson": "{\"id\":\"café\",\"data\":\"x\",\"multiplier\":2}",
+      "responseJson": "{\"id\":\"café\",\"data\":\"x\",\"checksum\":1685552221,\"length\":40,\"tag\":1685552247}"
+    },
+    {
+      "name": "escaped",
+      "id": "a\"b",
+      "data": "a\"b\\c",
+      "multiplier": 1,
+      "checksum": 1377019853,
+      "length": 45,
+      "tag": 1377019873,
+      "requestJson": "{\"id\":\"a\\\"b\",\"data\":\"a\\\"b\\\\c\",\"multiplier\":1}",
+      "responseJson": "{\"id\":\"a\\\"b\",\"data\":\"a\\\"b\\\\c\",\"checksum\":1377019853,\"length\":45,\"tag\":1377019873}"
+    },
+    {
+      "name": "zero-mult",
+      "id": "z",
+      "data": "xyz",
+      "multiplier": 0,
+      "checksum": 2444697634,
+      "length": 38,
+      "tag": 2444697604,
+      "requestJson": "{\"id\":\"z\",\"data\":\"xyz\",\"multiplier\":0}",
+      "responseJson": "{\"id\":\"z\",\"data\":\"xyz\",\"checksum\":2444697634,\"length\":38,\"tag\":2444697604}"
+    },
+    {
+      "name": "max-mult",
+      "id": "m",
+      "data": "Q",
+      "multiplier": 4294967295,
+      "checksum": 232671242,
+      "length": 45,
+      "tag": 4062296024,
+      "requestJson": "{\"id\":\"m\",\"data\":\"Q\",\"multiplier\":4294967295}",
+      "responseJson": "{\"id\":\"m\",\"data\":\"Q\",\"checksum\":232671242,\"length\":45,\"tag\":4062296024}"
+    },
+    {
+      "name": "kilobyte",
+      "id": "kb",
+      "data": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "multiplier": 9,
+      "checksum": 689058463,
+      "length": 1060,
+      "tag": 689059506,
+      "requestJson": "{\"id\":\"kb\",\"data\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\",\"multiplier\":9}",
+      "responseJson": "{\"id\":\"kb\",\"data\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\",\"checksum\":689058463,\"length\":1060,\"tag\":689059506}"
+    }
+  ]
+}

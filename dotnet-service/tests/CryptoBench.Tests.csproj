@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\CryptoBench.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Content Include="..\..\bench\testdata\process_vectors.json" Link="testdata\process_vectors.json" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="..\..\bench\testdata\aes_gcm_kat.json" Link="testdata\aes_gcm_kat.json" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="..\..\bench\testdata\bench_key.hex" Link="testdata\bench_key.hex" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>

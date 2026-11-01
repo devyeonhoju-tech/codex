@@ -1,0 +1,32 @@
+name: bench-services
+
+# Build and correctness only. The timed load test is bench/run.sh and is not run here.
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.99.1"
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+      - name: Python AES oracle dependency
+        run: python3 -c "import cryptography" || pip3 install -r bench/testdata/requirements.txt
+      - name: Rust tests
+        run: cargo test -p rust-service
+      - name: .NET tests
+        run: dotnet test dotnet-service/tests/CryptoBench.Tests.csproj -c Release --nologo
+      - name: Shared vectors
+        run: python3 bench/check_vectors.py
+      - name: Build both services
+        run: |
+          cargo build -p rust-service
+          dotnet publish dotnet-service/CryptoBench.csproj -c Release -o dotnet-service/publish --nologo
+      - name: Cross-service interop
+        run: bash bench/interop_servers.sh target/debug/rust-service dotnet-service/publish/cryptobench
