@@ -1,0 +1,14 @@
+/target/
+**/*.rs.bk
+dotnet-service/publish/
+**/bin/
+**/obj/
+**/*.user
+.vs/
+.idea/
+*.swp
+__pycache__/
+*.pyc
+.venv/
+bench/results/*.log
+bench/results/*.err

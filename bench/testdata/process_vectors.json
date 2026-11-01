@@ -1,0 +1,93 @@
+{
+  "algorithm": "FNV-1a 32-bit over the UTF-8 bytes of data. tag = checksum XOR multiplier XOR length (all uint32).",
+  "cases": [
+    {
+      "name": "empty-data",
+      "id": "e",
+      "data": "",
+      "multiplier": 0,
+      "checksum": 2166136261,
+      "length": 0,
+      "tag": 2166136261,
+      "requestJson": "{\"id\":\"e\",\"data\":\"\",\"multiplier\":0}",
+      "responseJson": "{\"id\":\"e\",\"checksum\":2166136261,\"length\":0,\"tag\":2166136261}"
+    },
+    {
+      "name": "hello",
+      "id": "hello",
+      "data": "hello",
+      "multiplier": 3,
+      "checksum": 1335831723,
+      "length": 5,
+      "tag": 1335831725,
+      "requestJson": "{\"id\":\"hello\",\"data\":\"hello\",\"multiplier\":3}",
+      "responseJson": "{\"id\":\"hello\",\"checksum\":1335831723,\"length\":5,\"tag\":1335831725}"
+    },
+    {
+      "name": "unicode-data",
+      "id": "cafe",
+      "data": "café",
+      "multiplier": 7,
+      "checksum": 2821410889,
+      "length": 5,
+      "tag": 2821410891,
+      "requestJson": "{\"id\":\"cafe\",\"data\":\"café\",\"multiplier\":7}",
+      "responseJson": "{\"id\":\"cafe\",\"checksum\":2821410889,\"length\":5,\"tag\":2821410891}"
+    },
+    {
+      "name": "unicode-id",
+      "id": "café",
+      "data": "x",
+      "multiplier": 2,
+      "checksum": 4245442695,
+      "length": 1,
+      "tag": 4245442692,
+      "requestJson": "{\"id\":\"café\",\"data\":\"x\",\"multiplier\":2}",
+      "responseJson": "{\"id\":\"café\",\"checksum\":4245442695,\"length\":1,\"tag\":4245442692}"
+    },
+    {
+      "name": "escaped",
+      "id": "a\"b",
+      "data": "a\"b\\c",
+      "multiplier": 1,
+      "checksum": 3581114653,
+      "length": 5,
+      "tag": 3581114649,
+      "requestJson": "{\"id\":\"a\\\"b\",\"data\":\"a\\\"b\\\\c\",\"multiplier\":1}",
+      "responseJson": "{\"id\":\"a\\\"b\",\"checksum\":3581114653,\"length\":5,\"tag\":3581114649}"
+    },
+    {
+      "name": "zero-mult",
+      "id": "z",
+      "data": "xyz",
+      "multiplier": 0,
+      "checksum": 3298945248,
+      "length": 3,
+      "tag": 3298945251,
+      "requestJson": "{\"id\":\"z\",\"data\":\"xyz\",\"multiplier\":0}",
+      "responseJson": "{\"id\":\"z\",\"checksum\":3298945248,\"length\":3,\"tag\":3298945251}"
+    },
+    {
+      "name": "max-mult",
+      "id": "m",
+      "data": "Q",
+      "multiplier": 4294967295,
+      "checksum": 3557560316,
+      "length": 1,
+      "tag": 737406978,
+      "requestJson": "{\"id\":\"m\",\"data\":\"Q\",\"multiplier\":4294967295}",
+      "responseJson": "{\"id\":\"m\",\"checksum\":3557560316,\"length\":1,\"tag\":737406978}"
+    },
+    {
+      "name": "kilobyte",
+      "id": "kb",
+      "data": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "multiplier": 9,
+      "checksum": 828140997,
+      "length": 1024,
+      "tag": 828139980,
+      "requestJson": "{\"id\":\"kb\",\"data\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\",\"multiplier\":9}",
+      "responseJson": "{\"id\":\"kb\",\"checksum\":828140997,\"length\":1024,\"tag\":828139980}"
+    }
+  ]
+}
