@@ -1,8 +1,10 @@
 //! Closed-loop HTTP/1.1 load generator for the two benchmark services.
 //!
-//! Latency is client-observed. On Linux, CPU is the process's user+system time
-//! from `/proc/<pid>/task/*/stat` over the measurement window (100% = one core),
-//! and memory is VmRSS sampled about five times a second.
+//! Latency is client-observed. On Linux, CPU is user+system time from
+//! `/proc/<pid>/stat` over the measurement window (100% = one core). That file
+//! is the thread group's total, including threads that have already exited.
+//! Summing `/proc/<pid>/task/*/stat` drops those threads and can report 0%.
+//! Memory is VmRSS sampled about five times a second.
 
 use std::fs::OpenOptions;
 use std::io::{BufRead, Write};
@@ -455,31 +457,20 @@ fn clk_tck() -> u64 {
 }
 
 fn read_cpu_ticks(pid: u32) -> anyhow::Result<u64> {
-    let mut total = 0u64;
-    let mut saw = false;
-    for entry in std::fs::read_dir(format!("/proc/{pid}/task"))
-        .with_context(|| format!("read tasks for {pid}"))?
-    {
-        let path = entry?.path().join("stat");
-        let Ok(text) = std::fs::read_to_string(path) else {
-            continue;
-        };
-        let Some((_, rest)) = text.rsplit_once(')') else {
-            continue;
-        };
-        let fields: Vec<&str> = rest.split_whitespace().collect();
-        if fields.len() < 13 {
-            continue;
-        }
-        let utime: u64 = fields[11].parse().context("utime")?;
-        let stime: u64 = fields[12].parse().context("stime")?;
-        total += utime + stime;
-        saw = true;
+    // `/proc/<pid>/stat` keeps the whole thread group's time. Per-task files do
+    // not: a thread that exits disappears, and the sum can go backwards.
+    let text = std::fs::read_to_string(format!("/proc/{pid}/stat"))
+        .with_context(|| format!("read /proc/{pid}/stat"))?;
+    let (_, rest) = text
+        .rsplit_once(')')
+        .ok_or_else(|| anyhow!("unrecognized stat for {pid}"))?;
+    let fields: Vec<&str> = rest.split_whitespace().collect();
+    if fields.len() < 13 {
+        anyhow::bail!("short stat for {pid}");
     }
-    if !saw {
-        anyhow::bail!("no task stats for pid {pid}");
-    }
-    Ok(total)
+    let utime: u64 = fields[11].parse().context("utime")?;
+    let stime: u64 = fields[12].parse().context("stime")?;
+    Ok(utime + stime)
 }
 
 fn read_rss_kib(pid: u32) -> anyhow::Result<u64> {
@@ -621,7 +612,7 @@ fn report(args: ReportArgs) -> anyhow::Result<()> {
 
 These numbers were measured by `bench/run.sh` on this machine. They are not a general ranking of Rust and C#. Absolute throughput will move on other hardware, and a shared cloud VM is noisy.
 
-Summary values are the **median of {reps} repetitions**. Each repetition is a closed-loop HTTP/1.1 run: {concurrency} in-flight requests, {warmup}s warm-up (discarded), {duration}s measured. Payload is the UTF-8 length of the JSON `data` field. CPU is server user+system time over the measured window, where 100% means one fully busy core. RSS is the server's resident set during that window.
+Summary values are the **median of {reps} repetitions**. Each repetition is a closed-loop HTTP/1.1 run: {concurrency} in-flight requests, {warmup}s warm-up (discarded), {duration}s measured. Payload is the UTF-8 length of the JSON `data` field. CPU is server user+system time from `/proc/<pid>/stat` over the measured window, where 100% means one fully busy core. RSS is the server's resident set during that window.
 
 ## Summary
 
