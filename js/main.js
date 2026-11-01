@@ -69,7 +69,8 @@
         cards.appendChild(button);
       });
       const first = cards.querySelector('button');
-      if (first) first.focus();
+      const coarse = window.matchMedia && window.matchMedia('(pointer: coarse)').matches;
+      if (first && !coarse) first.focus();
       say('Level ' + level + '. Choose an upgrade.');
     },
     hideLevelUp: function () {
@@ -132,7 +133,37 @@
     game.toggleMute();
   });
 
-  window.addEventListener('resize', function () { game.resize(); });
+  if (window.matchMedia && window.matchMedia('(pointer: coarse)').matches) {
+    hint.textContent = 'Drag anywhere to move. Bolts fire on their own. Curve back through the gems.';
+  }
+
+  function fitScreen() {
+    const vv = window.visualViewport;
+    const width = Math.round(vv ? vv.width : window.innerWidth);
+    const height = Math.round(vv ? vv.height : window.innerHeight);
+    if (width < 1 || height < 1) return;
+    if (app.dataset.fitW === String(width) && app.dataset.fitH === String(height)) return;
+    app.dataset.fitW = String(width);
+    app.dataset.fitH = String(height);
+    app.style.width = width + 'px';
+    app.style.height = height + 'px';
+    if (window.scrollX || window.scrollY) window.scrollTo(0, 0);
+    game.resize();
+  }
+
+  window.addEventListener('resize', fitScreen);
+  window.addEventListener('orientationchange', function () {
+    window.setTimeout(fitScreen, 50);
+    window.setTimeout(fitScreen, 300);
+  });
+  if (window.visualViewport) {
+    window.visualViewport.addEventListener('resize', fitScreen);
+    window.visualViewport.addEventListener('scroll', fitScreen);
+  }
+  if (window.history && 'scrollRestoration' in window.history) {
+    window.history.scrollRestoration = 'manual';
+  }
+  fitScreen();
   canvas.addEventListener('contextmenu', function (e) { e.preventDefault(); });
 
   let last = performance.now();

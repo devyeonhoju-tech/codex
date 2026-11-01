@@ -2,7 +2,8 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+  <meta name="theme-color" content="#07080c" />
   <title>Gloam</title>
   <meta name="description" content="Gloam is a small survivors-like. Move, let your bolts fly, and last the night." />
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect fill='%2307080c' width='32' height='32'/%3E%3Ccircle fill='%23f4ecd8' cx='14' cy='16' r='8'/%3E%3Ccircle fill='%2307080c' cx='18' cy='14' r='7'/%3E%3C/svg%3E" />
@@ -17,8 +18,8 @@
       <div class="hud-top">
         <div class="level-badge">Lv <span id="hud-level">1</span></div>
         <div id="hud-timer">00:00</div>
-        <div class="kills">
-          <span>Kills <span id="hud-kills">0</span></span>
+        <div class="hud-side">
+          <div class="kills">Kills <span id="hud-kills">0</span></div>
           <button id="mute" type="button" aria-pressed="false" aria-label="Mute sound">Sound on</button>
         </div>
       </div>

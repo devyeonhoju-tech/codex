@@ -4,7 +4,25 @@ A small survivors-like you can play in the browser. Move through a dark field, l
 
 Everything on screen is drawn with canvas shapes and CSS. There are no image assets and no third-party libraries.
 
-## Run
+## Play on your phone
+
+After this is merged to `main` and GitHub Pages is pointed at Actions, the game is served over HTTPS at:
+
+**https://devyeonhoju-tech.github.io/codex/**
+
+That address stays put. It updates a minute or two after each push to `main`. On a phone, drag anywhere on the field to move. The page does not scroll or pinch-zoom while you play, and turning the phone refits the field.
+
+This pull request cannot flip the repository setting. Pages is not enabled yet. Do this once, as the repo owner:
+
+1. Merge the pull request into `main`.
+2. On GitHub, open **Settings → Pages** for `devyeonhoju-tech/codex`.
+3. Under **Build and deployment**, set **Source** to **GitHub Actions**.
+4. Open the **Actions** tab. The workflow **Deploy Gloam to GitHub Pages** starts on the merge. If it does not, choose that workflow and press **Run workflow**. If GitHub asks you to approve the `github-pages` environment, approve it.
+5. When the run is green, open https://devyeonhoju-tech.github.io/codex/ on your phone.
+
+The first visit can take a minute while the certificate is issued. A 404 right after the run finishes usually means the site is still propagating. Reload once.
+
+## Run locally
 
 Open `index.html` in a browser.
 

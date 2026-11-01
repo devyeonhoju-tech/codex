@@ -45,9 +45,14 @@
       knob.style.transform = 'translate(0px,0px)';
     }
 
+    function onOverlay(target) {
+      return target && target.closest && target.closest('button, a, input, .overlay:not([hidden])');
+    }
+
     function onDown(e) {
       if (e.button !== 0 || pointerId !== null) return;
-      if (e.target.closest && e.target.closest('button, a, input, .overlay:not([hidden])')) return;
+      if (onOverlay(e.target)) return;
+      if (e.cancelable) e.preventDefault();
       pointerId = e.pointerId;
       originX = e.clientX;
       originY = e.clientY;
@@ -61,6 +66,7 @@
 
     function onMove(e) {
       if (e.pointerId !== pointerId) return;
+      if (e.cancelable) e.preventDefault();
       const dx = e.clientX - originX;
       const dy = e.clientY - originY;
       const dist = Math.hypot(dx, dy);
@@ -82,6 +88,14 @@
     window.addEventListener('pointermove', onMove);
     window.addEventListener('pointerup', onUp);
     window.addEventListener('pointercancel', onUp);
+
+    window.addEventListener('touchmove', function (e) {
+      if (onOverlay(e.target)) return;
+      if (e.cancelable) e.preventDefault();
+    }, { passive: false });
+
+    document.addEventListener('gesturestart', function (e) { e.preventDefault(); });
+    document.addEventListener('gesturechange', function (e) { e.preventDefault(); });
 
     return {
       axis: function () {
