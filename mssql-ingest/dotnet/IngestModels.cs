@@ -16,7 +16,7 @@ public enum WriteResult
 
 public sealed class IngestEvent
 {
-    public Guid Id { get; set; }
+    public string? Vantr { get; set; }
     public string? SourceId { get; set; }
     public DateTimeOffset Timestamp { get; set; }
     public string? Payload { get; set; }
@@ -35,6 +35,8 @@ public sealed class IngestOptions
     public const string ThrowawayPassword = "Ingest_Local_Dev1!";
     public const int MaxPayloadUnits = 1024;
     public const int MaxSourceUnits = 128;
+    // Assumption until the VAN publishes the real maximum for vantr.
+    public const int MaxVantrUnits = 128;
 
     public string Host { get; init; } = "127.0.0.1";
     public int Port { get; init; } = 1433;
@@ -125,9 +127,16 @@ public static class IngestValidation
             return false;
         }
 
-        if (ev.Id == Guid.Empty)
+        if (string.IsNullOrWhiteSpace(ev.Vantr))
         {
-            error = "invalid_id";
+            error = "invalid_vantr";
+            return false;
+        }
+
+        ev.Vantr = ev.Vantr.Trim();
+        if (ev.Vantr.Length > IngestOptions.MaxVantrUnits || ev.Vantr.Contains('\0'))
+        {
+            error = "invalid_vantr";
             return false;
         }
 

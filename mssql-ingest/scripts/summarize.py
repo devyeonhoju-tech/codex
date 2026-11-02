@@ -185,7 +185,13 @@ def main() -> None:
 
     rows = int(meta["rows"])
     distinct_ids = int(meta["distinct_ids"])
-    count_ok = rows == int(accepted) and distinct_ids == rows
+    resend_ratio = float(meta.get("resend_ratio") or 0)
+    duplicate_rows = rows - distinct_ids
+    if resend_ratio > 0:
+        # A resend of a committed vantr is another 202 and not another row.
+        count_ok = duplicate_rows == 0 and accepted >= rows and rows > 0
+    else:
+        count_ok = rows == int(accepted) and distinct_ids == rows
     expected = target * duration
     arrival_ok = expected <= 0 or sustain_count >= expected * 0.99
     sustained = (
@@ -218,6 +224,8 @@ def main() -> None:
         "avg_batch_rows": (rows / batches) if batches else None,
         "rows": rows,
         "distinct_ids": distinct_ids,
+        "duplicate_rows": duplicate_rows,
+        "resend_ratio": resend_ratio,
         "count_matches_accepted": count_ok,
         "sustained_target": sustained,
         "batch_size": meta.get("batch_size"),

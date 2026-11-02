@@ -145,8 +145,9 @@ app.MapPost("/v1/ingest", async (HttpRequest request, CancellationToken cancella
 
     return result switch
     {
-        WriteResult.Committed => Results.Json(new { status = "committed" }, statusCode: StatusCodes.Status202Accepted),
-        WriteResult.Duplicate => Error(StatusCodes.Status409Conflict, "duplicate_id"),
+        WriteResult.Committed or WriteResult.Duplicate => Results.Json(
+            new { status = "committed" },
+            statusCode: StatusCodes.Status202Accepted),
         WriteResult.Rejected => Error(StatusCodes.Status429TooManyRequests, "queue_full"),
         _ => Error(StatusCodes.Status503ServiceUnavailable, "write_failed"),
     };

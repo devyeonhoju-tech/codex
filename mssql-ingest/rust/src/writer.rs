@@ -6,8 +6,9 @@ use chrono::{DateTime, Utc};
 use tokio::sync::{mpsc, Mutex, Semaphore};
 use tokio::time::Instant;
 
-use crate::db::{self, Settings, SqlConn, WriteMode};
+use crate::db::{self, InsertError, Settings, SqlConn, WriteMode};
 use crate::event::IngestEvent;
+use crate::isolate::RowResult;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WriteOutcome {
@@ -151,37 +152,130 @@ async fn flush_batch(
     if conn.is_none() {
         *conn = db::connect(settings, &settings.database).await.ok();
     }
-    let outcome = match conn.as_mut() {
-        Some(client) => match db::bulk_insert(client, &batch).await {
-            Ok(()) => WriteOutcome::Committed,
-            Err(err) if db::is_duplicate(&err) => {
-                *conn = None;
-                WriteOutcome::Duplicate
+    let mut first_of = Vec::new();
+    let mut owner = Vec::with_capacity(batch.len());
+    for (index, pending) in batch.iter().enumerate() {
+        if let Some(existing) = first_of
+            .iter()
+            .position(|candidate: &usize| batch[*candidate].event.vantr == pending.event.vantr)
+        {
+            owner.push(existing);
+        } else {
+            owner.push(first_of.len());
+            first_of.push(index);
+        }
+    }
+    let distinct: Vec<&Pending> = first_of.iter().map(|index| &batch[*index]).collect();
+    let results = commit_distinct(settings, conn, &distinct).await;
+    stats.batches.fetch_add(1, Ordering::Relaxed);
+    for (index, pending) in batch.iter().enumerate() {
+        let result = results[owner[index]];
+        match result {
+            RowResult::Committed => {
+                stats.committed.fetch_add(1, Ordering::Relaxed);
+                let _ = pending.done.try_send(WriteOutcome::Committed);
             }
-            Err(err) => {
-                eprintln!("batch flush failed rows={} error={err}", batch.len());
-                *conn = None;
-                WriteOutcome::Failed
+            RowResult::Failed => {
+                stats.failed.fetch_add(1, Ordering::Relaxed);
+                let _ = pending.done.try_send(WriteOutcome::Failed);
             }
-        },
-        None => WriteOutcome::Failed,
+        }
+    }
+}
+
+fn commit_distinct<'a>(
+    settings: &'a Settings,
+    conn: &'a mut Option<SqlConn>,
+    rows: &'a [&'a Pending],
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = Vec<RowResult>> + Send + 'a>> {
+    Box::pin(async move {
+        let count = rows.len();
+        if count == 0 {
+            return Vec::new();
+        }
+        match insert_slice(settings, conn, rows).await {
+            Ok(()) => vec![RowResult::Committed; count],
+            Err(err) if err.fatal => vec![RowResult::Failed; count],
+            Err(_) if count == 1 => {
+                let exists = vantr_is_committed(settings, conn, &rows[0].event.vantr).await;
+                vec![if exists {
+                    RowResult::Committed
+                } else {
+                    RowResult::Failed
+                }]
+            }
+            Err(_) => {
+                let mid = count / 2;
+                let mut left = commit_distinct(settings, conn, &rows[..mid]).await;
+                let mut right = commit_distinct(settings, conn, &rows[mid..]).await;
+                left.append(&mut right);
+                left
+            }
+        }
+    })
+}
+
+async fn insert_slice(
+    settings: &Settings,
+    conn: &mut Option<SqlConn>,
+    rows: &[&Pending],
+) -> Result<(), InsertError> {
+    let owned: Vec<db::NewRow<'_>> = rows
+        .iter()
+        .map(|row| db::NewRow {
+            vantr: row.event.vantr.as_str(),
+            source_id: row.event.source_id.as_str(),
+            timestamp: row.event.timestamp,
+            payload: row.event.payload.as_str(),
+            received_at: row.received_at,
+        })
+        .collect();
+    let Some(client) = ensure_conn(settings, conn).await else {
+        return Err(InsertError {
+            fatal: true,
+            duplicate: false,
+            message: "sql connection unavailable".to_string(),
+        });
     };
-    match outcome {
-        WriteOutcome::Committed => {
-            stats.batches.fetch_add(1, Ordering::Relaxed);
-            stats.committed.fetch_add(batch.len() as u64, Ordering::Relaxed);
+    match tokio::time::timeout(Duration::from_secs(15), db::insert_many(client, &owned)).await {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(err)) => {
+            eprintln!(
+                "batch insert failed fatal={} duplicate={} message={}",
+                err.fatal, err.duplicate, err.message
+            );
+            *conn = None;
+            Err(err)
         }
-        WriteOutcome::Duplicate => {
-            stats.duplicates.fetch_add(batch.len() as u64, Ordering::Relaxed);
+        Err(_) => {
+            *conn = None;
+            Err(InsertError {
+                fatal: true,
+                duplicate: false,
+                message: "sql timeout".to_string(),
+            })
         }
-        WriteOutcome::Failed => {
-            stats.failed.fetch_add(batch.len() as u64, Ordering::Relaxed);
-        }
-        WriteOutcome::Rejected => {}
     }
-    for pending in batch {
-        let _ = pending.done.try_send(outcome);
+}
+
+async fn vantr_is_committed(settings: &Settings, conn: &mut Option<SqlConn>, vantr: &str) -> bool {
+    let Some(client) = ensure_conn(settings, conn).await else {
+        return false;
+    };
+    match db::vantr_exists(client, vantr).await {
+        Ok(found) => found,
+        Err(_) => {
+            *conn = None;
+            false
+        }
     }
+}
+
+async fn ensure_conn<'a>(settings: &Settings, conn: &'a mut Option<SqlConn>) -> Option<&'a mut SqlConn> {
+    if conn.is_none() {
+        *conn = db::connect(settings, &settings.database).await.ok();
+    }
+    conn.as_mut()
 }
 
 pub struct SinglePool {
@@ -231,7 +325,11 @@ impl SinglePool {
             }
             Err(err) if db::is_duplicate(&err) => {
                 self.stats.duplicates.fetch_add(1, Ordering::Relaxed);
-                WriteOutcome::Duplicate
+                self.stats.committed.fetch_add(1, Ordering::Relaxed);
+                if let Some(client) = conn {
+                    self.idle.lock().await.push(client);
+                }
+                WriteOutcome::Committed
             }
             Err(err) => {
                 eprintln!("single insert failed error={err}");

@@ -48,12 +48,15 @@ if [[ "$PROFILE" == "smoke" ]]; then
   export WARMUP_RATE="${WARMUP_RATE:-20}"
   export PRE_ALLOCATED_VUS="${PRE_ALLOCATED_VUS:-40}"
   export MAX_VUS="${MAX_VUS:-120}"
+  export RESEND_RATIO="${RESEND_RATIO:-0.1}"
   STRICT="${STRICT:-1}"
 elif [[ "$PROFILE" == "step" ]]; then
   export RATE="${RATE:-0}"
   export DURATION="${DURATION:-110s}"
+  export RESEND_RATIO="${RESEND_RATIO:-0}"
   STRICT="${STRICT:-0}"
 else
+  export RESEND_RATIO="${RESEND_RATIO:-0}"
   export RATE="${RATE:-1000}"
   export DURATION="${DURATION:-60s}"
   export WARMUP="${WARMUP:-15s}"
@@ -175,6 +178,11 @@ if [[ "$ready" != "1" ]]; then
   exit 1
 fi
 
+if [[ "$PROFILE" == "smoke" ]]; then
+  python3 "$ROOT/scripts/idempotency_probe.py" "$BASE_URL"
+  "${bin[@]}" truncate >/dev/null
+fi
+
 python3 "$ROOT/scripts/sample_resources.py" --pid "$SERVER_PID" --sql-container "$SQL_CONTAINER" --out "$SAMPLE" &
 SAMPLER_PID=$!
 
@@ -254,6 +262,7 @@ meta = {
     "writers": stats.get("writers"),
     "batches": stats.get("batches"),
     "payload_bytes": int(os.environ.get("PAYLOAD_BYTES", "512")),
+    "resend_ratio": float(os.environ.get("RESEND_RATIO", "0") or 0),
     "recovery_model": info.get("recovery_model", ""),
     "delayed_durability": info.get("delayed_durability", ""),
     "host": platform.node(),

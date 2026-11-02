@@ -21,12 +21,44 @@ public class IngestTests
     }
 
     [Fact]
-    public void RejectsAnEmptyGuid()
+    public void RejectsAnEmptyVantr()
     {
         var ev = Sample("x");
-        ev.Id = Guid.Empty;
+        ev.Vantr = " ";
         Assert.False(IngestValidation.TryValidate(ev, out var error));
-        Assert.Equal("invalid_id", error);
+        Assert.Equal("invalid_vantr", error);
+    }
+
+    [Fact]
+    public async Task BatchKeepsGoodRowsWhenItContainsADuplicateAndAnInvalidRow()
+    {
+        var stored = new HashSet<string>(StringComparer.Ordinal) { "dup" };
+        var keys = new[] { "ok", "dup", "bad" };
+        var results = await BatchIsolator.IsolateAsync(
+            keys.Length,
+            (start, count, _) =>
+            {
+                var slice = keys.Skip(start).Take(count).ToArray();
+                if (slice.Contains("bad"))
+                {
+                    throw new InvalidOperationException("invalid row");
+                }
+
+                foreach (var key in slice)
+                {
+                    stored.Add(key);
+                }
+
+                return Task.CompletedTask;
+            },
+            (index, _) => Task.FromResult(stored.Contains(keys[index])),
+            _ => false,
+            CancellationToken.None);
+
+        Assert.Equal(WriteResult.Committed, results[0]);
+        Assert.Equal(WriteResult.Committed, results[1]);
+        Assert.Equal(WriteResult.Failed, results[2]);
+        Assert.Equal(["dup", "ok"], stored.Order().ToArray());
     }
 
     [Fact]
@@ -74,7 +106,7 @@ public class IngestTests
 
     private static IngestEvent Sample(string payload) => new()
     {
-        Id = Guid.NewGuid(),
+        Vantr = Guid.NewGuid().ToString("N"),
         SourceId = "device-1",
         Timestamp = DateTimeOffset.Parse("2026-11-01T15:34:00Z"),
         Payload = payload,

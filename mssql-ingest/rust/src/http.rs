@@ -98,8 +98,9 @@ async fn ingest(State(state): State<AppState>, body: Bytes) -> Response {
 
 fn outcome_response(outcome: WriteOutcome) -> Response {
     match outcome {
-        WriteOutcome::Committed => json_response(StatusCode::ACCEPTED, r#"{"status":"committed"}"#.to_string()),
-        WriteOutcome::Duplicate => error(StatusCode::CONFLICT, "duplicate_id"),
+        WriteOutcome::Committed | WriteOutcome::Duplicate => {
+            json_response(StatusCode::ACCEPTED, r#"{"status":"committed"}"#.to_string())
+        }
         WriteOutcome::Rejected => error(StatusCode::TOO_MANY_REQUESTS, "queue_full"),
         WriteOutcome::Failed => error(StatusCode::SERVICE_UNAVAILABLE, "write_failed"),
     }
