@@ -16,7 +16,11 @@ python3 -m http.server 8080
 
 휴대폰에서는 칸과 버튼을 누르고, 화면이 스크롤되거나 확대되지 않아야 한다. 가로 화면에서는 조작 버튼이 오른쪽으로 붙는다.
 
-이 저장소의 GitHub Pages 워크플로는 기존 Gloam 게임만 배포한다. 전생검신 배포를 거기에 넣으면 같은 Pages 사이트를 덮어 쓰게 되어, 워크플로는 건드리지 않았다. 로컬에서 연다.
+GitHub Pages가 Actions를 소스로 쓰면, Gloam은 사이트 루트에 그대로 있고 이 게임은 그 아래 경로로 올라간다.
+
+**https://devyeonhoju-tech.github.io/codex/geomsin-defense/**
+
+`index.html`의 `css/`와 `js/` 참조는 문서 기준 상대 경로라서, 이 하위 경로에서도 따로 빌드하지 않는다.
 
 ## 규칙
 
@@ -71,7 +75,11 @@ Then open `http://localhost:8080/geomsin-defense/`. Nothing to install or build.
 
 On a phone, tap cells and buttons. The page should not scroll or zoom while you play. In landscape the buttons sit on the right.
 
-This repo's GitHub Pages workflow publishes the existing Gloam game only. A second Pages deploy would replace that site, and the existing workflow was left unchanged. Play it locally.
+When GitHub Pages uses Actions as its source, Gloam stays at the site root and this game is published under it:
+
+**https://devyeonhoju-tech.github.io/codex/geomsin-defense/**
+
+The `css/` and `js/` links in `index.html` are document-relative, so that subpath needs no build.
 
 ## Rules
 

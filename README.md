@@ -2,8 +2,8 @@
 
 This repository holds two browser games and a Rust versus .NET benchmark. The games and the GitHub Pages workflow are separate from the benchmark services.
 
-- **Gloam**, a survivors-like, is the site root. Play it from `index.html`.
-- **전생검신**, a random-defense game, is in [`geomsin-defense/`](geomsin-defense/README.md).
+- **Gloam**, a survivors-like, is the site root. Play it from `index.html`. On GitHub Pages it stays at `/`.
+- **전생검신**, a random-defense game, is in [`geomsin-defense/`](geomsin-defense/README.md). On GitHub Pages it is served at `/geomsin-defense/`.
 - The AES-GCM comparison is in [`rust-service/`](rust-service/), [`dotnet-service/`](dotnet-service/), and [`bench/`](bench/WIRE_FORMAT.md).
 
 # Gloam
@@ -14,19 +14,19 @@ Everything on screen is drawn with canvas shapes and CSS. There are no image ass
 
 ## Play on your phone
 
-After this is merged to `main` and GitHub Pages is pointed at Actions, the game is served over HTTPS at:
+After a push to `main`, and once GitHub Pages is pointed at Actions, both games are served over HTTPS:
 
-**https://devyeonhoju-tech.github.io/codex/**
+- **Gloam** stays at **https://devyeonhoju-tech.github.io/codex/**
+- **전생검신** is at **https://devyeonhoju-tech.github.io/codex/geomsin-defense/**
 
-That address stays put. It updates a minute or two after each push to `main`. On a phone, drag anywhere on the field to move. The page does not scroll or pinch-zoom while you play, and turning the phone refits the field.
+Those addresses stay put. They update a minute or two after each push to `main`. On a phone, drag anywhere on the Gloam field to move. For 전생검신, tap cells and buttons. Neither page scrolls or pinch-zooms while you play, and turning the phone refits the field.
 
-This pull request cannot flip the repository setting. Pages is not enabled yet. Do this once, as the repo owner:
+Pages is not enabled until the repository owner sets it. Do this once:
 
-1. Merge the pull request into `main`.
-2. On GitHub, open **Settings → Pages** for `devyeonhoju-tech/codex`.
-3. Under **Build and deployment**, set **Source** to **GitHub Actions**.
-4. Open the **Actions** tab. The workflow **Deploy Gloam to GitHub Pages** starts on the merge. If it does not, choose that workflow and press **Run workflow**. If GitHub asks you to approve the `github-pages` environment, approve it.
-5. When the run is green, open https://devyeonhoju-tech.github.io/codex/ on your phone.
+1. On GitHub, open **Settings → Pages** for `devyeonhoju-tech/codex`.
+2. Under **Build and deployment**, set **Source** to **GitHub Actions**.
+3. Open the **Actions** tab. The workflow **Deploy games to GitHub Pages** starts on the next push to `main`. If it does not, choose that workflow and press **Run workflow**. If GitHub asks you to approve the `github-pages` environment, approve it.
+4. When the run is green, open the addresses above on your phone.
 
 The first visit can take a minute while the certificate is issued. A 404 right after the run finishes usually means the site is still propagating. Reload once.
 

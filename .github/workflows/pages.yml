@@ -1,7 +1,8 @@
-# Deploys the static game to GitHub Pages on every push to main.
+# Deploys the static games to GitHub Pages on every push to main.
+# Gloam stays at the site root. 전생검신 is published beside it at /geomsin-defense/.
 # One-time repo setting: Settings → Pages → Build and deployment → Source = GitHub Actions.
 # Until that is set, this workflow cannot publish.
-name: Deploy Gloam to GitHub Pages
+name: Deploy games to GitHub Pages
 
 on:
   push:
@@ -34,8 +35,12 @@ jobs:
       - name: Assemble site
         run: |
           mkdir -p _site
+          # Gloam stays at the site root, so its Pages URL does not change.
           cp index.html _site/
           cp -r css js _site/
+          # 전생검신 is build-free and uses document-relative css/ and js/ URLs,
+          # so the same files work at this subpath on a project site.
+          cp -r geomsin-defense _site/geomsin-defense
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
