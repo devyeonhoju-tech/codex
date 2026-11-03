@@ -342,11 +342,60 @@ h2 { font-size: 28px; }
 
 .codex-card.is-locked { opacity: 0.78; }
 
-.codex-swatch {
-  width: 8px;
-  border-radius: 999px;
-  flex: none;
+.codex-head {
+  display: flex;
+  gap: 10px;
+  align-items: center;
 }
+
+.codex-portrait {
+  width: 64px;
+  flex: none;
+  background: #241820;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+
+.codex-portrait canvas {
+  display: block;
+  width: 64px;
+  height: 78px;
+}
+
+.codex-blades {
+  display: flex;
+  gap: 4px;
+}
+
+.codex-tier {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+  padding: 2px 0 4px;
+  border-radius: 10px;
+  background: #241820;
+  border: 1px solid #4a3842;
+}
+
+.codex-tier canvas {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+
+.codex-tier em {
+  font-style: normal;
+  font-size: 11px;
+  line-height: 1.2;
+}
+
+.codex-tier em.is-known { color: var(--paper); }
+.codex-tier em.is-miss { color: #8d7d86; }
+
+.codex-tier.is-miss { opacity: 0.8; }
 
 .codex-body {
   min-width: 0;
