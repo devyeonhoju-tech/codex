@@ -1023,6 +1023,8 @@ GeomsinGame.prototype.syncPositions = function () {
     enemy.x = pos.x;
     enemy.y = pos.y;
     enemy.drawRadius = Math.max(8, enemy.radius * Math.min(1.35, Math.max(0.85, this.layout.cells[0].h / 78)));
+    var look = pointAt(this.layout, Math.min(1, enemy.progress + 0.02));
+    enemy.face = look.x < enemy.x - 0.5 ? -1 : 1;
   }
   for (i = 0; i < this.decor.length; i++) {
     var decor = this.decor[i];
@@ -1035,6 +1037,8 @@ GeomsinGame.prototype.syncPositions = function () {
     decor.boss = false;
     decor.drawRadius = Math.max(8, proto.radius * Math.min(1.35, Math.max(0.85, this.layout.cells[0].h / 78)));
     decor.name = proto.name;
+    var dlook = pointAt(this.layout, Math.min(1, decor.progress + 0.02));
+    decor.face = dlook.x < decor.x - 0.5 ? -1 : 1;
   }
 };
 
@@ -1141,6 +1145,7 @@ GeomsinGame.prototype.updateUnits = function (dt) {
   for (i = 0; i < this.cells.length; i++) {
     var unit = this.cells[i];
     if (!unit) continue;
+    if (unit.swing > 0) unit.swing = Math.max(0, unit.swing - dt * 5.2);
     var speed = unit.buffMul || 1;
     if (unit.cooldown > 0) unit.cooldown -= dt * speed;
     if (unit.cooldown <= 0) {
@@ -1210,7 +1215,9 @@ GeomsinGame.prototype.performAttack = function (unit) {
     this.hit(hitList[h], amount, skill);
   }
   if (primary) {
-    var life = skill.type === 'area' ? 0.22 : 0.12;
+    unit.swing = 1;
+    unit.aim = Math.atan2(primary.y - unit.y, primary.x - unit.x);
+    var life = skill.type === 'area' ? 0.26 : 0.16;
     this.fx.push({
       kind: 'line',
       x1: unit.x,
@@ -1238,8 +1245,8 @@ GeomsinGame.prototype.performAttack = function (unit) {
         y: primary.y,
         angle: Math.atan2(primary.y - unit.y, primary.x - unit.x),
         color: family.color,
-        life: 0.16,
-        max: 0.16
+        life: 0.2,
+        max: 0.2
       });
     }
     if (this.fx.length > 80) this.fx.splice(0, this.fx.length - 80);
@@ -1298,7 +1305,7 @@ GeomsinGame.prototype.pierceTargets = function (unit, targets, skill) {
 GeomsinGame.prototype.hit = function (enemy, damage, skill) {
   if (!enemy || enemy.dead) return;
   enemy.hp -= damage;
-  enemy.flash = 0.08;
+  enemy.flash = 0.14;
   if (skill.slow) {
     var applied = 1 - (1 - skill.slow) * (1 - (enemy.slowResist || 0));
     enemy.slowFactor = Math.min(enemy.slowFactor, applied);
@@ -1327,9 +1334,20 @@ GeomsinGame.prototype.kill = function (enemy) {
     x: enemy.x,
     y: enemy.y,
     r: enemy.drawRadius || enemy.radius,
-    color: '#f4ead8',
-    life: 0.28,
-    max: 0.28
+    color: enemy.color || '#f4ead8',
+    life: 0.32,
+    max: 0.32
+  });
+  this.fx.push({
+    kind: 'soul',
+    x: enemy.x,
+    y: enemy.y,
+    r: enemy.drawRadius || enemy.radius,
+    color: enemy.color,
+    shape: enemy.shape,
+    type: enemy.type,
+    life: 0.46,
+    max: 0.46
   });
   if (this.kills > this.best.bestKills) {
     this.best.bestKills = this.kills;

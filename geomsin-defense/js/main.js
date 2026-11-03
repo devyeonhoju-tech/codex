@@ -213,6 +213,18 @@ function closeRecipe() {
   game.hold = false;
 }
 
+function paintCodexSword(canvas, family, tier, opts, cssW, cssH) {
+  var dpr = Math.min(2, window.devicePixelRatio || 1);
+  var w = cssW || 56;
+  var h = cssH || 70;
+  canvas.width = Math.round(w * dpr);
+  canvas.height = Math.round(h * dpr);
+  canvas.setAttribute('aria-hidden', 'true');
+  var c = canvas.getContext('2d');
+  c.setTransform(dpr, 0, 0, dpr, 0, 0);
+  window.drawGeomsinSword(c, family, tier, w / 2, h / 2 + 2, w / 56, opts || {});
+}
+
 function renderCodex() {
   var progress = game.codexProgress();
   setText(
@@ -225,12 +237,7 @@ function renderCodex() {
     var card = document.createElement('article');
     card.className = 'codex-card' + (row.known ? '' : ' is-locked');
     card.setAttribute('data-family', row.id);
-    var swatch = document.createElement('i');
-    swatch.className = 'codex-swatch';
-    swatch.style.background = row.color;
-    swatch.setAttribute('aria-hidden', 'true');
-    var body = document.createElement('div');
-    body.className = 'codex-body';
+    var family = game.fam(row.id);
     var name = document.createElement('b');
     name.textContent = row.known && row.epithet ? (row.name + ' · ' + row.epithet) : row.name;
     var meta = document.createElement('span');
@@ -238,23 +245,57 @@ function renderCodex() {
     meta.textContent = row.known
       ? ((row.pool ? '소환' : '비급') + (row.skill ? (' · ' + row.skill) : ''))
       : (row.pool ? '소환' : '비급');
-    var tiers = document.createElement('span');
-    tiers.className = 'codex-tiers';
-    row.tiers.forEach(function (tier, index) {
-      if (index) tiers.appendChild(document.createTextNode(' '));
-      var mark = document.createElement('em');
-      mark.className = tier.known ? 'is-known' : 'is-miss';
-      mark.textContent = tier.known ? tier.name : '미지';
-      tiers.appendChild(mark);
-    });
     var flavor = document.createElement('small');
     flavor.textContent = row.flavor;
-    body.appendChild(name);
-    body.appendChild(meta);
-    body.appendChild(tiers);
-    body.appendChild(flavor);
-    card.appendChild(swatch);
-    card.appendChild(body);
+    if (!row.known) {
+      var head = document.createElement('div');
+      head.className = 'codex-head';
+      var portrait = document.createElement('div');
+      portrait.className = 'codex-portrait';
+      var lockedCanvas = document.createElement('canvas');
+      paintCodexSword(lockedCanvas, family, 1, { locked: true, shadow: true }, 64, 78);
+      portrait.appendChild(lockedCanvas);
+      var text = document.createElement('div');
+      text.className = 'codex-body';
+      var tiers = document.createElement('span');
+      tiers.className = 'codex-tiers';
+      row.tiers.forEach(function (tier, index) {
+        if (index) tiers.appendChild(document.createTextNode(' '));
+        var mark = document.createElement('em');
+        mark.className = 'is-miss';
+        mark.textContent = '미지';
+        tiers.appendChild(mark);
+      });
+      text.appendChild(name);
+      text.appendChild(meta);
+      text.appendChild(tiers);
+      text.appendChild(flavor);
+      head.appendChild(portrait);
+      head.appendChild(text);
+      card.appendChild(head);
+    } else {
+      var body = document.createElement('div');
+      body.className = 'codex-body';
+      var blades = document.createElement('div');
+      blades.className = 'codex-blades';
+      row.tiers.forEach(function (tier) {
+        var cell = document.createElement('div');
+        cell.className = 'codex-tier' + (tier.known ? '' : ' is-miss');
+        var canvas = document.createElement('canvas');
+        paintCodexSword(canvas, family, tier.tier, { ghost: !tier.known, shadow: true });
+        var mark = document.createElement('em');
+        mark.className = tier.known ? 'is-known' : 'is-miss';
+        mark.textContent = tier.known ? tier.name : '미지';
+        cell.appendChild(canvas);
+        cell.appendChild(mark);
+        blades.appendChild(cell);
+      });
+      body.appendChild(name);
+      body.appendChild(meta);
+      body.appendChild(blades);
+      body.appendChild(flavor);
+      card.appendChild(body);
+    }
     codexList.appendChild(card);
   });
 }
