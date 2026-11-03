@@ -24,6 +24,7 @@ var GEOMSIN_BALANCE = {
     pierceWidth: 0.42,
     buffCap: 0.85,
     storageKey: 'geomsin-defense-best-v1',
+    codexKey: 'geomsin-defense-codex-v1',
     muteKey: 'geomsin-defense-mute-v1'
   },
 
@@ -349,7 +350,8 @@ var GEOMSIN_BALANCE = {
   },
 
   /* Boss waves are 5, 10, and 15. hpMul applies to non-boss enemies only.
-     gap is extra seconds before that group. interval is seconds between spawns. */
+     gap is extra seconds before that group. interval is seconds between spawns.
+     After the last entry, endless builds further waves. */
   waves: [
     { hpMul: 1, clearGold: 22, groups: [{ type: 'shade', count: 8, interval: 0.9 }] },
     { hpMul: 1.08, clearGold: 26, groups: [{ type: 'shade', count: 8, interval: 0.75 }, { type: 'wraith', count: 4, interval: 0.95 }] },
@@ -391,7 +393,51 @@ var GEOMSIN_BALANCE = {
         { type: 'wisp', count: 8, interval: 0.28 }
       ]
     }
-  ]
+  ],
+
+  /* Waves after `waves`. extra is 1 on the first generated wave.
+     hpMul, speed, gold, and counts grow from the last scripted wave.
+     Boss HP grows from enemies[bossAnchor].hp, not from the smaller boss bodies.
+     A boss is inserted when the wave number is divisible by bossEvery. */
+  endless: {
+    hpGrowth: 1.12,
+    countGrowth: 0.07,
+    intervalMul: 0.985,
+    minInterval: 0.18,
+    clearGoldBase: 82,
+    clearGoldAdd: 6,
+    bossClearBonus: 90,
+    goldGrowth: 1.045,
+    bossEvery: 5,
+    bossHpGrowth: 1.11,
+    bossGoldGrowth: 1.08,
+    bossAnchor: 'boss3',
+    bossInterval: 1,
+    bossGap: 2.2,
+    speedGrowth: 1.012,
+    speedCap: 1.32,
+    bosses: ['boss1', 'boss2', 'boss3'],
+    patterns: [
+      [
+        { type: 'shade', count: 8, interval: 0.48 },
+        { type: 'wraith', count: 6, interval: 0.42 }
+      ],
+      [
+        { type: 'wisp', count: 12, interval: 0.28 },
+        { type: 'iron', count: 4, interval: 0.95 }
+      ],
+      [
+        { type: 'iron', count: 4, interval: 0.9 },
+        { type: 'shade', count: 8, interval: 0.4 },
+        { type: 'wraith', count: 6, interval: 0.4 }
+      ],
+      [
+        { type: 'wraith', count: 8, interval: 0.38 },
+        { type: 'wisp', count: 10, interval: 0.26 },
+        { type: 'iron', count: 3, interval: 0.9 }
+      ]
+    ]
+  }
 };
 
 globalThis.GEOMSIN_BALANCE = GEOMSIN_BALANCE;
