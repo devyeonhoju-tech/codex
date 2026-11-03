@@ -44,11 +44,12 @@
       <h1>전생검신</h1>
       <p class="lede">검과 함께 스러진 이가 회검각에서 눈을 뜬다. 전생의 검객을 불러 세우고, 같은 검 셋을 겹쳐 더 깊은 기억을 깨워라.</p>
       <button id="btn-start" class="primary" type="button">검을 들다</button>
+      <button id="btn-codex" class="ghost" type="button">검 도감</button>
       <ul class="rules">
         <li>금화로 검을 소환하고, 빈 칸을 눌러 배치한다.</li>
         <li>같은 검이 셋이면 다음 등급으로 합체된다.</li>
         <li>비급은 서로 다른 검을 바쳐 숨은 검을 만든다.</li>
-        <li>적이 문까지 가면 목숨이 줄고, 마지막 파도를 막으면 이긴다.</li>
+        <li>적이 문까지 가면 목숨이 줄고, 15파를 막으면 이긴다. 계속 진행을 고르면 파도가 이어진다.</li>
       </ul>
       <p id="title-best" class="best">아직 기록이 없다.</p>
       <p class="keys">키보드: Space 소환 · R 재굴림 · U 각성 · B 비급 · X 방출 · Enter 출진 · M 소리</p>
@@ -62,6 +63,33 @@
       <p class="lede">셋이 겹치는 합체와 달리, 적힌 검을 제물로 바친다. 더 높은 등급이 있으면 낮은 쪽을 먼저 쓴다. 보는 동안 시간은 멈춘다.</p>
       <div id="recipe-list"></div>
       <button id="recipe-close" class="ghost" type="button">닫기</button>
+    </div>
+  </section>
+
+  <section id="gate" class="overlay" hidden>
+    <div class="panel">
+      <p class="eyebrow">열다섯 파도</p>
+      <h2>검로가 끝나지 않는다</h2>
+      <p class="lede">승리는 이미 이 기기에 남았다. 여기서 마치거나, 계속 진행해 더 깊은 파도로 갈 수 있다. 그 뒤로는 적의 체력과 수, 속도가 파도마다 조금씩 오른다.</p>
+      <dl class="stats">
+        <div><dt>파도</dt><dd id="gate-wave">15 / 15</dd></div>
+        <div><dt>처치</dt><dd id="gate-kills">0</dd></div>
+        <div><dt>시간</dt><dd id="gate-time">00:00</dd></div>
+      </dl>
+      <p id="gate-best" class="best"></p>
+      <button id="btn-endless" class="primary" type="button">계속 진행</button>
+      <button id="btn-claim" class="ghost" type="button">여기서 마치다</button>
+      <p class="keys">Enter 계속 진행 · Esc 여기서 마치다</p>
+    </div>
+  </section>
+
+  <section id="codex" class="overlay" hidden>
+    <div class="panel">
+      <p class="eyebrow">회검각</p>
+      <h2>검 도감</h2>
+      <p id="codex-progress" class="lede">발견한 검이 여기 남는다.</p>
+      <div id="codex-list"></div>
+      <button id="codex-close" class="ghost" type="button">닫기</button>
     </div>
   </section>
 

@@ -193,6 +193,7 @@ button { font-family: inherit; }
 #controls button:focus-visible,
 #btn-mute:focus-visible,
 .primary:focus-visible,
+.ghost:focus-visible,
 .recipe-btn:focus-visible {
   outline: 2px solid var(--gold);
   outline-offset: 2px;
@@ -326,6 +327,42 @@ h2 { font-size: 28px; }
 .recipe-btn span { color: var(--gold); font-size: 13px; }
 .recipe-btn small { color: var(--muted); line-height: 1.35; }
 .recipe-btn.is-ready { border-color: var(--gold); }
+
+.codex-card {
+  display: flex;
+  gap: 10px;
+  align-items: stretch;
+  margin: 0 0 8px;
+  padding: 10px 12px;
+  min-height: 48px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: #20161c;
+}
+
+.codex-card.is-locked { opacity: 0.78; }
+
+.codex-swatch {
+  width: 8px;
+  border-radius: 999px;
+  flex: none;
+}
+
+.codex-body {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.codex-card b { font-size: 16px; font-weight: 700; }
+.codex-meta, .codex-tiers { font-size: 13px; line-height: 1.35; }
+.codex-meta { color: var(--gold); }
+.codex-tiers em { font-style: normal; }
+.codex-tiers .is-known { color: var(--paper); }
+.codex-tiers .is-miss { color: #6d5e68; }
+.codex-card small { color: var(--muted); line-height: 1.35; }
+#codex-list { margin-bottom: 4px; }
 
 .sr-only {
   position: absolute;

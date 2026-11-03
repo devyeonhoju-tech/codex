@@ -152,6 +152,7 @@ function GeomsinGame(opts) {
   this.viewH = 640;
   this.layout = null;
   this.best = this.loadBest();
+  this.codex = this.loadCodex();
   this.reset(false);
 }
 
@@ -182,6 +183,28 @@ GeomsinGame.prototype.validate = function () {
       if (!b.enemies[groups[g].type]) throw new Error('Unknown enemy ' + groups[g].type);
     }
   }
+  if (!b.endless || !b.endless.patterns || !b.endless.patterns.length) {
+    throw new Error('endless.patterns required');
+  }
+  if (!b.enemies[b.endless.bossAnchor] || !b.enemies[b.endless.bossAnchor].boss) {
+    throw new Error('Unknown endless boss anchor ' + b.endless.bossAnchor);
+  }
+  var p;
+  for (p = 0; p < b.endless.patterns.length; p++) {
+    var pattern = b.endless.patterns[p];
+    if (!pattern || !pattern.length) throw new Error('Empty endless pattern');
+    for (g = 0; g < pattern.length; g++) {
+      var kind = b.enemies[pattern[g].type];
+      if (!kind || kind.boss) throw new Error('Unknown endless enemy ' + pattern[g].type);
+    }
+  }
+  var bosses = b.endless.bosses || [];
+  if (!bosses.length) throw new Error('endless.bosses required');
+  for (i = 0; i < bosses.length; i++) {
+    if (!b.enemies[bosses[i]] || !b.enemies[bosses[i]].boss) {
+      throw new Error('Unknown endless boss ' + bosses[i]);
+    }
+  }
 };
 
 GeomsinGame.prototype.loadBest = function () {
@@ -207,11 +230,115 @@ GeomsinGame.prototype.persistBest = function () {
   } catch (err) { /* ignore quota / private mode */ }
 };
 
+GeomsinGame.prototype.loadCodex = function () {
+  var seen = {};
+  try {
+    var raw = localStorage.getItem(this.balance.meta.codexKey);
+    if (!raw) return { seen: seen };
+    var data = JSON.parse(raw);
+    var list = data && data.seen;
+    var i;
+    if (!Array.isArray(list)) return { seen: seen };
+    for (i = 0; i < list.length; i++) {
+      var key = list[i];
+      if (typeof key !== 'string') continue;
+      var parts = key.split(':');
+      if (parts.length !== 2 || !this.familyMap[parts[0]]) continue;
+      var tier = Number(parts[1]);
+      if (!tier || tier < 1 || tier > this.balance.tiers.length) continue;
+      seen[parts[0] + ':' + tier] = 1;
+    }
+  } catch (err) { /* ignore broken storage */ }
+  return { seen: seen };
+};
+
+GeomsinGame.prototype.persistCodex = function () {
+  try {
+    var seen = [];
+    var key;
+    for (key in this.codex.seen) {
+      if (this.codex.seen[key]) seen.push(key);
+    }
+    seen.sort();
+    localStorage.setItem(this.balance.meta.codexKey, JSON.stringify({ seen: seen }));
+  } catch (err) { /* ignore quota / private mode */ }
+};
+
+GeomsinGame.prototype.rememberUnit = function (familyId, tier) {
+  if (!familyId || !tier || !this.codex) return;
+  var key = familyId + ':' + tier;
+  if (this.codex.seen[key]) return;
+  this.codex.seen[key] = 1;
+  this.persistCodex();
+};
+
+GeomsinGame.prototype.codexProgress = function () {
+  var families = this.balance.families;
+  var tiers = this.balance.tiers;
+  var familyHits = 0;
+  var tierHits = 0;
+  var f;
+  var t;
+  for (f = 0; f < families.length; f++) {
+    var any = false;
+    for (t = 0; t < tiers.length; t++) {
+      if (this.codex.seen[families[f].id + ':' + tiers[t].tier]) {
+        any = true;
+        tierHits += 1;
+      }
+    }
+    if (any) familyHits += 1;
+  }
+  return {
+    families: familyHits,
+    familyTotal: families.length,
+    tiers: tierHits,
+    tierTotal: families.length * tiers.length
+  };
+};
+
+GeomsinGame.prototype.codexRows = function () {
+  var self = this;
+  var tiers = this.balance.tiers;
+  var rows = this.balance.families.map(function (family) {
+    var knownTiers = [];
+    var any = false;
+    var i;
+    for (i = 0; i < tiers.length; i++) {
+      var known = !!self.codex.seen[family.id + ':' + tiers[i].tier];
+      if (known) any = true;
+      knownTiers.push({ tier: tiers[i].tier, name: tiers[i].name, known: known });
+    }
+    return {
+      id: family.id,
+      known: any,
+      pool: !!family.pool,
+      name: any ? family.name : (family.pool ? '소환되지 않은 검' : '비급의 검'),
+      epithet: any ? family.epithet : '',
+      flavor: any ? family.flavor : (family.pool
+        ? '금화로 불러 본 뒤에 이름이 열린다.'
+        : '비급으로만 깨어난다. 재료를 맞춰 보면 도감에 남는다.'),
+      skill: any ? (self.balance.skillNames[family.skill] || family.skill) : '',
+      color: any ? family.color : '#4a3842',
+      tiers: knownTiers
+    };
+  });
+  var known = [];
+  var locked = [];
+  rows.forEach(function (row) {
+    if (row.known) known.push(row);
+    else locked.push(row);
+  });
+  return known.concat(locked);
+};
+
 GeomsinGame.prototype.reset = function (keepView) {
   var meta = this.balance.meta;
   var count = meta.cols * meta.rows;
   this.phase = 'title';
   this.hold = false;
+  this.endless = false;
+  this.campaignWon = false;
   this.time = 0;
   this.anim = 0;
   this.prepLeft = 0;
@@ -361,7 +488,7 @@ GeomsinGame.prototype.start = function () {
 
 GeomsinGame.prototype.createUnit = function (familyId, tier, paid) {
   var interval = this.fam(familyId).interval * this.tierInfo(tier).intervalMul;
-  return {
+  var unit = {
     uid: ++this.uid,
     family: familyId,
     tier: tier,
@@ -372,6 +499,8 @@ GeomsinGame.prototype.createUnit = function (familyId, tier, paid) {
     x: 0,
     y: 0
   };
+  this.rememberUnit(familyId, tier);
+  return unit;
 };
 
 GeomsinGame.prototype.rollTier = function () {
@@ -718,8 +847,61 @@ GeomsinGame.prototype.craft = function (id) {
   this.emit('craft');
 };
 
+GeomsinGame.prototype.waveDef = function (index) {
+  if (index >= 0 && index < this.balance.waves.length) return this.balance.waves[index];
+  return this.makeEndlessWave(index);
+};
+
+GeomsinGame.prototype.makeEndlessWave = function (index) {
+  var spec = this.balance.endless;
+  var scripted = this.balance.waves.length;
+  var extra = index - scripted + 1;
+  if (extra < 1) extra = 1;
+  var waveNo = index + 1;
+  var last = this.balance.waves[scripted - 1];
+  var pattern = spec.patterns[(extra - 1) % spec.patterns.length];
+  var countMul = 1 + spec.countGrowth * (extra - 1);
+  var intervalMul = Math.pow(spec.intervalMul, extra - 1);
+  var groups = [];
+  var i;
+  for (i = 0; i < pattern.length; i++) {
+    var src = pattern[i];
+    groups.push({
+      type: src.type,
+      count: Math.max(1, Math.round(src.count * countMul)),
+      interval: Math.max(spec.minInterval, Math.round(src.interval * intervalMul * 100) / 100)
+    });
+  }
+  var bossWave = spec.bossEvery > 0 && waveNo % spec.bossEvery === 0;
+  var bossHp = null;
+  var bossGoldMul = 1;
+  if (bossWave) {
+    var bossOrdinal = Math.floor(waveNo / spec.bossEvery) - 1;
+    var bossType = spec.bosses[((bossOrdinal % spec.bosses.length) + spec.bosses.length) % spec.bosses.length];
+    var anchor = this.balance.enemies[spec.bossAnchor];
+    groups.splice(Math.floor(groups.length / 2), 0, {
+      type: bossType,
+      count: 1,
+      interval: spec.bossInterval,
+      gap: spec.bossGap
+    });
+    bossHp = Math.max(1, Math.round(anchor.hp * Math.pow(spec.bossHpGrowth, extra)));
+    bossGoldMul = Math.pow(spec.bossGoldGrowth, extra);
+  }
+  return {
+    hpMul: last.hpMul * Math.pow(spec.hpGrowth, extra),
+    speedMul: Math.min(spec.speedCap, Math.pow(spec.speedGrowth, extra)),
+    goldMul: Math.pow(spec.goldGrowth, extra),
+    bossGoldMul: bossGoldMul,
+    bossHp: bossHp,
+    clearGold: Math.round(spec.clearGoldBase + spec.clearGoldAdd * (extra - 1) + (bossWave ? spec.bossClearBonus : 0)),
+    groups: groups,
+    endless: true
+  };
+};
+
 GeomsinGame.prototype.wavePreview = function (index) {
-  var wave = this.balance.waves[index];
+  var wave = this.waveDef(index);
   if (!wave) return '';
   var parts = [];
   var i;
@@ -744,7 +926,7 @@ GeomsinGame.prototype.callWave = function () {
 GeomsinGame.prototype.beginWave = function () {
   if (this.phase !== 'prep') return;
   this.wave += 1;
-  var wave = this.balance.waves[this.wave - 1];
+  var wave = this.waveDef(this.wave - 1);
   this.phase = 'combat';
   this.combatTime = 0;
   this.queue = this.buildQueue(wave);
@@ -760,7 +942,7 @@ GeomsinGame.prototype.beginWave = function () {
     var enemy = this.balance.enemies[wave.groups[i].type];
     if (enemy.boss) bossName = enemy.name;
   }
-  var last = this.wave === this.balance.waves.length;
+  var last = !this.endless && this.wave === this.balance.waves.length;
   if (bossName) {
     this.banner = { title: '우두머리', sub: bossName, until: this.anim + 2.6 };
     this.say('제 ' + this.wave + '파 · 우두머리 ' + bossName);
@@ -769,7 +951,7 @@ GeomsinGame.prototype.beginWave = function () {
   } else {
     this.banner = {
       title: '제 ' + this.wave + '파',
-      sub: last ? '마지막 파도' : '잔념이 검로에 들어선다',
+      sub: last ? '마지막 파도' : (this.endless ? '검로는 끝나지 않는다' : '잔념이 검로에 들어선다'),
       until: this.anim + 1.8
     };
     this.say('제 ' + this.wave + '파가 시작된다.');
@@ -795,17 +977,21 @@ GeomsinGame.prototype.buildQueue = function (wave) {
 
 GeomsinGame.prototype.spawnEnemy = function (type) {
   var proto = this.balance.enemies[type];
-  var wave = this.balance.waves[this.wave - 1];
-  var mul = proto.boss ? 1 : wave.hpMul;
-  var hp = Math.max(1, Math.round(proto.hp * mul));
+  var wave = this.waveDef(this.wave - 1);
+  var hp;
+  if (proto.boss && wave.bossHp != null) hp = wave.bossHp;
+  else hp = proto.hp * (proto.boss ? 1 : wave.hpMul);
+  hp = Math.max(1, Math.round(hp));
+  var speedMul = wave.speedMul || 1;
+  var goldScale = proto.boss ? (wave.bossGoldMul || 1) : (wave.goldMul || 1);
   this.enemies.push({
     uid: ++this.uid,
     type: type,
     name: proto.name,
     hp: hp,
     maxHp: hp,
-    speed: proto.speed,
-    gold: proto.gold,
+    speed: proto.speed * speedMul,
+    gold: Math.max(1, Math.round(proto.gold * goldScale)),
     leak: proto.leak,
     radius: proto.radius,
     color: proto.color,
@@ -864,7 +1050,7 @@ GeomsinGame.prototype.update = function (dt) {
     this.updateDecor(dt);
     return;
   }
-  if (this.phase === 'won' || this.phase === 'lost') return;
+  if (this.phase === 'won' || this.phase === 'lost' || this.phase === 'gate') return;
   this.time += dt;
   if (this.phase === 'prep') {
     this.prepLeft -= dt;
@@ -1190,11 +1376,11 @@ GeomsinGame.prototype.checkWaveClear = function () {
   if (this.phase !== 'combat') return;
   if (this.spawnIndex < this.queue.length) return;
   if (this.enemies.length) return;
-  var wave = this.balance.waves[this.wave - 1];
+  var wave = this.waveDef(this.wave - 1);
   this.gold += wave.clearGold;
   this.goldEarned += wave.clearGold;
-  if (this.wave >= this.balance.waves.length) {
-    this.finish('won');
+  if (!this.endless && this.wave >= this.balance.waves.length) {
+    this.reachGate();
     return;
   }
   this.phase = 'prep';
@@ -1203,15 +1389,53 @@ GeomsinGame.prototype.checkWaveClear = function () {
   this.emit('ui');
 };
 
+GeomsinGame.prototype.recordCampaignWin = function () {
+  if (this.campaignWon) return;
+  this.campaignWon = true;
+  this.best.wins += 1;
+  if (this.best.bestWinSeconds == null || this.time < this.best.bestWinSeconds) {
+    this.best.bestWinSeconds = this.time;
+  }
+  if (this.wave > this.best.bestWave) this.best.bestWave = this.wave;
+  if (this.kills > this.best.bestKills) this.best.bestKills = this.kills;
+  this.persistBest();
+};
+
+GeomsinGame.prototype.reachGate = function () {
+  if (this.phase === 'gate' || this.phase === 'won' || this.phase === 'lost') return;
+  this.phase = 'gate';
+  this.hold = false;
+  this.recordCampaignWin();
+  this.banner = { title: '검신 귀환', sub: '여기서 마치거나, 더 나아간다', until: this.anim + 8 };
+  this.say('열다섯 파도를 막았다. 계속 진행하면 검로가 이어진다.');
+  this.emit('win');
+};
+
+GeomsinGame.prototype.continueEndless = function () {
+  if (this.phase !== 'gate') return;
+  this.endless = true;
+  this.phase = 'prep';
+  this.prepLeft = this.balance.meta.prepSeconds;
+  this.banner = { title: '무한', sub: '난이도는 파도마다 오른다', until: this.anim + 2.4 };
+  this.say('검로가 이어진다. 제 ' + (this.wave + 1) + '파.');
+  this.emit('ui');
+};
+
+GeomsinGame.prototype.claimVictory = function () {
+  if (this.phase !== 'gate') return;
+  this.phase = 'won';
+  this.hold = false;
+  this.banner = { title: '검신 귀환', sub: '열다섯 파도를 베었다', until: this.anim + 6 };
+  this.say('검신이 돌아왔다.');
+  this.emit('ui');
+};
+
 GeomsinGame.prototype.finish = function (result) {
-  if (this.phase === 'won' || this.phase === 'lost') return;
+  if (this.phase === 'won' || this.phase === 'lost' || this.phase === 'gate') return;
   this.phase = result;
   this.hold = false;
   if (result === 'won') {
-    this.best.wins += 1;
-    if (this.best.bestWinSeconds == null || this.time < this.best.bestWinSeconds) {
-      this.best.bestWinSeconds = this.time;
-    }
+    this.recordCampaignWin();
     this.banner = { title: '검신 귀환', sub: '열다섯 파도를 베었다', until: this.anim + 6 };
     this.say('검신이 돌아왔다.');
   } else {
@@ -1251,13 +1475,16 @@ GeomsinGame.prototype.previewText = function () {
   if (this.phase === 'title') return '전생의 검객을 불러, 검로를 막는다.';
   if (this.phase === 'prep') {
     var next = this.wave + 1;
-    return '다음 ' + next + '파 · ' + this.wavePreview(next - 1) + ' · ' + Math.ceil(this.prepLeft) + '초';
+    var tag = this.endless ? '무한 ' : '다음 ';
+    return tag + next + '파 · ' + this.wavePreview(next - 1) + ' · ' + Math.ceil(this.prepLeft) + '초';
   }
   if (this.phase === 'combat') {
-    return '제 ' + this.wave + '파 전투 · 적 ' + this.livingEnemies().length;
+    var head = this.endless ? '무한 ' : '제 ';
+    return head + this.wave + '파 전투 · 적 ' + this.livingEnemies().length;
   }
+  if (this.phase === 'gate') return '열다섯 파도를 막았다. 계속할 것인가.';
   if (this.phase === 'won') return '회검각의 문이 조용히 열렸다.';
-  if (this.phase === 'lost') return '잔념이 문턱을 넘었다.';
+  if (this.phase === 'lost') return this.endless ? '무한의 검로에서 검이 꺾였다.' : '잔념이 문턱을 넘었다.';
   return '';
 };
 

@@ -27,10 +27,14 @@ var statusEl = document.getElementById('status');
 var live = document.getElementById('live');
 var title = document.getElementById('title');
 var gameover = document.getElementById('gameover');
+var gate = document.getElementById('gate');
+var codex = document.getElementById('codex');
+var codexList = document.getElementById('codex-list');
 var recipe = document.getElementById('recipe');
 var recipeList = document.getElementById('recipe-list');
 var lastStatus = '';
 var recipeSig = '';
+var codexOpen = false;
 
 function formatClock(seconds) {
   if (seconds == null || !isFinite(seconds)) return '—';
@@ -42,9 +46,15 @@ function formatClock(seconds) {
 
 function bestLine(best) {
   if (!best.bestWave && !best.wins && !best.bestKills) return '아직 기록이 없다.';
-  var line = '최고 ' + best.bestWave + '파 · 처치 ' + best.bestKills;
+  var line = '최고 도달 ' + best.bestWave + '파 · 처치 ' + best.bestKills;
   if (best.wins) line += ' · 승리 ' + best.wins + '회 · 최단 ' + formatClock(best.bestWinSeconds);
   return line;
+}
+
+function waveFraction(current) {
+  if (!current) return '—';
+  if (game.endless || current > balance.waves.length) return current + ' · 무한';
+  return current + ' / ' + balance.waves.length;
 }
 
 function renderRecipes(force) {
@@ -84,12 +94,15 @@ function syncUi() {
   preview.hidden = !playing;
   inspect.hidden = !playing;
   statusEl.hidden = !playing;
-  title.hidden = phase !== 'title';
+  if (phase !== 'title') codexOpen = false;
+  title.hidden = phase !== 'title' || codexOpen;
+  codex.hidden = !codexOpen;
+  gate.hidden = phase !== 'gate';
   gameover.hidden = phase !== 'won' && phase !== 'lost';
   if (!recipe.hidden && !playing) closeRecipe();
 
   var shownWave = game.displayWave();
-  setText('hud-wave', shownWave ? (shownWave + ' / ' + balance.waves.length) : '—');
+  setText('hud-wave', waveFraction(shownWave));
   setText('hud-gold', String(game.gold));
   setText('hud-lives', String(game.lives));
   setText('hud-time', game.clockText());
@@ -151,14 +164,22 @@ function syncUi() {
     document.getElementById('over-title').textContent = phase === 'won' ? '검신이 돌아왔다' : '검이 꺾였다';
     document.getElementById('over-flavor').textContent = phase === 'won'
       ? '열다섯 번째 파도가 걷혔다. 전생의 검이 당신의 손에 남는다.'
-      : '잔념이 문턱을 넘었다. 검은 다시 재 속에 묻힌다.';
-    setText('stat-wave', game.wave + ' / ' + balance.waves.length);
+      : (game.endless
+        ? '무한의 검로에서 잔념이 문턱을 넘었다. 열다섯 파도의 승리는 기록에 남아 있다.'
+        : '잔념이 문턱을 넘었다. 검은 다시 재 속에 묻힌다.');
+    setText('stat-wave', waveFraction(game.wave));
     setText('stat-kills', String(game.kills));
     setText('stat-merges', String(game.merges));
     setText('stat-leaks', String(game.leaked));
     setText('stat-time', game.clockText());
     setText('stat-gold', String(game.goldEarned));
     setText('over-best', bestLine(game.best));
+  }
+  if (phase === 'gate') {
+    setText('gate-wave', game.wave + ' / ' + balance.waves.length);
+    setText('gate-kills', String(game.kills));
+    setText('gate-time', game.clockText());
+    setText('gate-best', bestLine(game.best));
   }
 
   if (!recipe.hidden) renderRecipes(false);
@@ -192,18 +213,97 @@ function closeRecipe() {
   game.hold = false;
 }
 
+function renderCodex() {
+  var progress = game.codexProgress();
+  setText(
+    'codex-progress',
+    '발견한 검 ' + progress.families + ' / ' + progress.familyTotal +
+      ' · 등급 ' + progress.tiers + ' / ' + progress.tierTotal
+  );
+  codexList.textContent = '';
+  game.codexRows().forEach(function (row) {
+    var card = document.createElement('article');
+    card.className = 'codex-card' + (row.known ? '' : ' is-locked');
+    card.setAttribute('data-family', row.id);
+    var swatch = document.createElement('i');
+    swatch.className = 'codex-swatch';
+    swatch.style.background = row.color;
+    swatch.setAttribute('aria-hidden', 'true');
+    var body = document.createElement('div');
+    body.className = 'codex-body';
+    var name = document.createElement('b');
+    name.textContent = row.known && row.epithet ? (row.name + ' · ' + row.epithet) : row.name;
+    var meta = document.createElement('span');
+    meta.className = 'codex-meta';
+    meta.textContent = row.known
+      ? ((row.pool ? '소환' : '비급') + (row.skill ? (' · ' + row.skill) : ''))
+      : (row.pool ? '소환' : '비급');
+    var tiers = document.createElement('span');
+    tiers.className = 'codex-tiers';
+    row.tiers.forEach(function (tier, index) {
+      if (index) tiers.appendChild(document.createTextNode(' '));
+      var mark = document.createElement('em');
+      mark.className = tier.known ? 'is-known' : 'is-miss';
+      mark.textContent = tier.known ? tier.name : '미지';
+      tiers.appendChild(mark);
+    });
+    var flavor = document.createElement('small');
+    flavor.textContent = row.flavor;
+    body.appendChild(name);
+    body.appendChild(meta);
+    body.appendChild(tiers);
+    body.appendChild(flavor);
+    card.appendChild(swatch);
+    card.appendChild(body);
+    codexList.appendChild(card);
+  });
+}
+
+function openCodex() {
+  if (game.phase !== 'title') return;
+  codexOpen = true;
+  codex.hidden = false;
+  title.hidden = true;
+  renderCodex();
+  audio.play('ui');
+}
+
+function closeCodex() {
+  codexOpen = false;
+  codex.hidden = true;
+  if (game.phase === 'title') title.hidden = false;
+}
+
 function onKey(event) {
   if (event.repeat) return;
   var key = event.key.toLowerCase();
   var phase = game.phase;
+  if (!codex.hidden && key !== 'escape' && key !== 'enter' && key !== ' ') return;
   if (key === 'escape') {
-    if (!recipe.hidden) {
+    if (!codex.hidden) {
+      closeCodex();
+      event.preventDefault();
+    } else if (!recipe.hidden) {
       closeRecipe();
+      event.preventDefault();
+    } else if (phase === 'gate') {
+      game.claimVictory();
       event.preventDefault();
     } else if (game.selected != null) {
       game.selected = null;
       event.preventDefault();
     }
+    return;
+  }
+  if (!codex.hidden && (key === 'enter' || key === ' ')) {
+    closeCodex();
+    event.preventDefault();
+    return;
+  }
+  if (phase === 'gate' && key === 'enter') {
+    audio.resume();
+    game.continueEndless();
+    event.preventDefault();
     return;
   }
   if (phase === 'title' && (key === 'enter' || key === ' ')) {
@@ -243,6 +343,24 @@ function canvasPoint(event) {
 document.getElementById('btn-start').addEventListener('click', function () {
   audio.resume();
   game.start();
+});
+document.getElementById('btn-codex').addEventListener('click', function () {
+  audio.resume();
+  openCodex();
+});
+document.getElementById('codex-close').addEventListener('click', function () {
+  closeCodex();
+});
+codex.addEventListener('click', function (event) {
+  if (event.target === codex) closeCodex();
+});
+document.getElementById('btn-endless').addEventListener('click', function () {
+  audio.resume();
+  game.continueEndless();
+});
+document.getElementById('btn-claim').addEventListener('click', function () {
+  audio.resume();
+  game.claimVictory();
 });
 document.getElementById('btn-restart').addEventListener('click', function () {
   audio.resume();
@@ -291,7 +409,7 @@ document.getElementById('btn-mute').addEventListener('click', function () {
 });
 
 canvas.addEventListener('pointerdown', function (event) {
-  if (game.phase === 'title' || game.phase === 'won' || game.phase === 'lost' || game.hold) return;
+  if (game.phase === 'title' || game.phase === 'won' || game.phase === 'lost' || game.phase === 'gate' || game.hold) return;
   event.preventDefault();
   audio.resume();
   canvas.setPointerCapture(event.pointerId);
@@ -303,7 +421,7 @@ canvas.addEventListener('pointermove', function (event) {
   game.pointerMove(point.x, point.y);
 });
 canvas.addEventListener('pointerup', function (event) {
-  if (game.phase === 'title' || game.phase === 'won' || game.phase === 'lost' || game.hold) return;
+  if (game.phase === 'title' || game.phase === 'won' || game.phase === 'lost' || game.phase === 'gate' || game.hold) return;
   var point = canvasPoint(event);
   game.pointerUp(point.x, point.y);
 });
